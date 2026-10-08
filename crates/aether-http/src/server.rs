@@ -9,7 +9,7 @@
 //!   request with `Connection: close` (V0.1, ADR-009).
 
 use aether_core::error::{AetherError, AetherResult};
-use aether_core::model::{Body, HttpVersion, Method, Request, TransportProto};
+use aether_core::model::{HttpVersion, Method, Request, TransportProto};
 use aether_core::{AetherEvent, Scope};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -199,7 +199,7 @@ impl ProxyServer {
                         .ok();
                 }
                 match wire::read_body(&mut reader, &spec, self.cfg.capture_max_body).await {
-                    Ok(bytes) => request.body = Body::binary(bytes),
+                    Ok(bytes) => request.body = wire::body_from_captured(bytes),
                     Err(e) if e.to_string().contains("capture limit") => {
                         let res = wire::error_response(413, &e.to_string())?;
                         reader

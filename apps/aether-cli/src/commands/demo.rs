@@ -13,7 +13,7 @@ pub async fn run() -> AetherResult<()> {
 
     // The same core a GUI/automation client would drive — no UI in sight.
     let bus = EventBus::new(64);
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
 
     // Hook A: a compiled hook (what the daemon ships internally).
     struct Classifier;

@@ -16,6 +16,7 @@ Architecture Decision Records. One decision, one file, permanent status.
 | [009](ADR-009-network-stack.md) | Network stack: tokio + rustls + rcgen, **hand-rolled h1** | Accepted |
 | [010](ADR-010-control-plane-protocol.md) | Control-plane protocol v1 (ops, auth, origin) | Accepted |
 | [011](ADR-011-body-capture-policy.md) | Body capture policy + upstream TLS knobs | Accepted |
+| [012](ADR-012-console-ui-and-replay.md) | Console UI stack, desktop shell, flows_replay, live rules | Accepted |
 
 ## Where each decision lives in code
 
@@ -29,6 +30,7 @@ Architecture Decision Records. One decision, one file, permanent status.
 - **ADR-008** → `LICENSE`, `NOTICE`, README licensing section
 - **ADR-009** → `crates/aether-http/src/{wire,upstream,server}.rs`
 - **ADR-011** → capture limits in `crates/aether-http/src/{wire,upstream,engine}.rs`
+- **ADR-012** → `apps/aether-ui/src/**` (console), `apps/aether-desktop/` (shell), `flows_replay` + `registry` in `crates/aether-daemon/src/control.rs`, live registry in `crates/aether-core/src/hooks.rs`, `sync_into` in `crates/aether-daemon/src/rules.rs`
 
 ## Convention
 

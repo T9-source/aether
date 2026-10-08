@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aether",
+  "version": "0.1.0",
+  "identifier": "com.smart-jemy.aether",
+  "build": {
+    "beforeDevCommand": "cd ../aether-ui && npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "cd ../aether-ui && npm run build",
+    "frontendDist": "../aether-ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Aether — API Security Proxy",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 980,
+        "minHeight": 600,
+        "center": true,
+        "backgroundColor": "#0B0E14"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:* ws://[::1]:*; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
+  }
+}

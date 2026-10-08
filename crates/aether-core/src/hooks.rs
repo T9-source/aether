@@ -9,7 +9,7 @@
 //! 5. Hooks have a timeout budget (enforced by the pipeline, per stage).
 
 use async_trait::async_trait;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::context::RequestContext;
 use crate::error::AetherResult;
@@ -52,9 +52,19 @@ pub trait Hook: Send + Sync {
     }
 }
 
+/// A *live* hook registry: hooks can be registered/unregistered at runtime
+/// while the pipeline reads a consistent snapshot per stage. Readers clone an
+/// `Arc<Vec<_>>` (one short read-lock, then lock-free iteration); writers
+/// publish a new vector — no reader is ever blocked by a registration.
+/// This is what makes control-plane rule edits apply to in-flight traffic
+/// without restarting the daemon (ADR-006: plugin architecture early).
+///
+/// A published, immutable set of hooks — swapping it is a pointer write.
+type HookSet = Arc<Vec<Arc<dyn Hook>>>;
+
 #[derive(Clone, Default)]
 pub struct HookRegistry {
-    hooks: Vec<Arc<dyn Hook>>,
+    hooks: Arc<RwLock<HookSet>>,
 }
 
 impl HookRegistry {
@@ -63,31 +73,57 @@ impl HookRegistry {
     }
 
     /// Registers keeping hooks sorted by priority (stable for equal priority).
-    pub fn register(&mut self, hook: Arc<dyn Hook>) {
-        let pos = self
-            .hooks
-            .partition_point(|h| h.priority() <= hook.priority());
-        self.hooks.insert(pos, hook);
+    pub fn register(&self, hook: Arc<dyn Hook>) {
+        let mut hooks = self.write_lock();
+        let mut next: Vec<Arc<dyn Hook>> = hooks.as_ref().clone();
+        let pos = next.partition_point(|h| h.priority() <= hook.priority());
+        next.insert(pos, hook);
+        *hooks = Arc::new(next);
     }
 
-    pub fn register_fn(&mut self, hook: impl Hook + 'static) {
+    pub fn register_fn(&self, hook: impl Hook + 'static) {
         self.register(Arc::new(hook));
     }
 
-    pub fn hooks(&self) -> &[Arc<dyn Hook>] {
-        &self.hooks
+    /// Removes every hook whose name starts with `prefix`. Returns the count.
+    pub fn unregister_prefix(&self, prefix: &str) -> usize {
+        let mut hooks = self.write_lock();
+        let kept: Vec<Arc<dyn Hook>> = hooks
+            .iter()
+            .filter(|h| !h.name().starts_with(prefix))
+            .cloned()
+            .collect();
+        let removed = hooks.len() - kept.len();
+        *hooks = Arc::new(kept);
+        removed
     }
 
-    pub fn names(&self) -> Vec<&str> {
-        self.hooks.iter().map(|h| h.name()).collect()
+    /// Consistent, cheap-to-iterate snapshot of the current hook set.
+    pub fn snapshot(&self) -> HookSet {
+        Arc::clone(&self.read_lock())
+    }
+
+    pub fn names(&self) -> Vec<String> {
+        self.snapshot()
+            .iter()
+            .map(|h| h.name().to_string())
+            .collect()
     }
 
     pub fn len(&self) -> usize {
-        self.hooks.len()
+        self.snapshot().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hooks.is_empty()
+        self.len() == 0
+    }
+
+    fn read_lock(&self) -> HookSet {
+        Arc::clone(&self.hooks.read().expect("hook registry read lock"))
+    }
+
+    fn write_lock(&self) -> std::sync::RwLockWriteGuard<'_, HookSet> {
+        self.hooks.write().expect("hook registry write lock")
     }
 }
 
@@ -130,7 +166,7 @@ mod tests {
 
     #[test]
     fn registry_orders_by_priority_stably() {
-        let mut r = HookRegistry::new();
+        let r = HookRegistry::new();
         r.register(Arc::new(Noop {
             name: "b-late",
             prio: 5,
@@ -148,6 +184,11 @@ mod tests {
             prio: 5,
         }));
         assert_eq!(r.names(), vec!["early1", "early2", "b-late", "a-late"]);
+
+        // live removal by prefix leaves the rest intact
+        let removed = r.unregister_prefix("early");
+        assert_eq!(removed, 2);
+        assert_eq!(r.names(), vec!["b-late", "a-late"]);
     }
 
     #[tokio::test]

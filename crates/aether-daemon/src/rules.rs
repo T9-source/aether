@@ -8,12 +8,56 @@
 //! boundary that a future WASM plugin host will reuse.
 
 use aether_core::error::{AetherError, AetherResult};
-use aether_core::hooks::HookRegistry;
+use aether_core::hooks::{Hook, HookRegistry};
 use aether_core::{RuleHook, RuleSpec};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Prefix reserved by the rules layer inside the shared registry; syncing
+/// replaces exactly these hooks, never anything else registered by other
+/// subsystems.
+const RULE_HOOK_PREFIX: &str = "rule:";
+
+/// Wraps a [`RuleHook`] with a stable registry name (`rule:<id>`) so the sync
+/// layer can replace individual rules without touching other hooks. All hook
+/// behavior is delegated unchanged.
+struct IdHook {
+    label: String,
+    inner: RuleHook,
+}
+
+#[async_trait::async_trait]
+impl Hook for IdHook {
+    fn name(&self) -> &str {
+        &self.label
+    }
+    fn priority(&self) -> i32 {
+        self.inner.priority()
+    }
+    async fn on_request(
+        &self,
+        ctx: &mut aether_core::context::RequestContext,
+        req: &mut aether_core::model::Request,
+    ) -> aether_core::hooks::HookResult {
+        self.inner.on_request(ctx, req).await
+    }
+    async fn on_response(
+        &self,
+        ctx: &mut aether_core::context::RequestContext,
+        res: &mut aether_core::model::Response,
+    ) -> aether_core::hooks::HookResult {
+        self.inner.on_response(ctx, res).await
+    }
+    async fn on_flow_complete(
+        &self,
+        ctx: &aether_core::context::RequestContext,
+        flow: &aether_core::model::Flow,
+    ) -> aether_core::hooks::HookResult {
+        self.inner.on_flow_complete(ctx, flow).await
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuleEntry {
@@ -98,19 +142,31 @@ impl RulesStore {
         true
     }
 
-    /// Registers every enabled rule into the shared registry.
-    pub fn register_into(&self, registry: &mut HookRegistry) -> AetherResult<usize> {
+    /// Re-projects every enabled rule into the live registry: removes the
+    /// previous `rule:*` hooks, registers the current set. Called at boot and
+    /// after every control-plane mutation, so rule edits hit in-flight
+    /// traffic without a daemon restart (ADR-006 #1).
+    pub fn sync_into(&self, registry: &HookRegistry) -> AetherResult<usize> {
+        registry.unregister_prefix(RULE_HOOK_PREFIX);
         let entries = self.entries.read().expect("rules lock").clone();
         let mut count = 0;
         for entry in &entries {
             if !entry.spec.enabled {
                 continue;
             }
-            let hook = RuleHook::from_spec(entry.spec.clone())?;
-            registry.register_fn(hook);
+            let inner = RuleHook::from_spec(entry.spec.clone())?;
+            registry.register_fn(IdHook {
+                label: format!("{RULE_HOOK_PREFIX}{}", entry.id),
+                inner,
+            });
             count += 1;
         }
         Ok(count)
+    }
+
+    /// Registers every enabled rule into the shared registry.
+    pub fn register_into(&self, registry: &HookRegistry) -> AetherResult<usize> {
+        self.sync_into(registry)
     }
 
     fn persist(&self) -> AetherResult<()> {
@@ -171,16 +227,28 @@ mod tests {
     }
 
     #[test]
-    fn register_only_enabled() {
+    fn register_only_enabled_and_resync() {
         let dir = TempDir::new().unwrap();
         let store = RulesStore::load(dir.path()).unwrap();
         let on = store.add(spec("on")).unwrap();
         let off = store.add(spec("off")).unwrap();
         assert!(store.set_enabled(off, false));
-        let mut registry = HookRegistry::new();
-        let count = store.register_into(&mut registry).unwrap();
+        let registry = HookRegistry::new();
+        let count = store.register_into(&registry).unwrap();
         assert_eq!(count, 1);
-        assert_eq!(registry.hooks()[0].name(), "on");
+        assert_eq!(registry.names(), vec!["rule:1"]);
         let _ = on;
+
+        // disable the last enabled rule → sync leaves the registry empty
+        assert!(store.set_enabled(on, false));
+        store.sync_into(&registry).unwrap();
+        assert!(registry.is_empty());
+
+        // re-enable → back exactly once (no duplicate registration)
+        assert!(store.set_enabled(on, true));
+        store.sync_into(&registry).unwrap();
+        store.sync_into(&registry).unwrap();
+        assert_eq!(registry.names(), vec!["rule:1"]);
+        assert_eq!(registry.len(), 1);
     }
 }

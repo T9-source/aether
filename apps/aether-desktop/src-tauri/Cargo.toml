@@ -1,0 +1,22 @@
+[package]
+name = "aether-desktop"
+description = "Aether desktop shell — wraps the Aether console UI in a native window (ADR-012)"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["smart-jemy"]
+repository = "https://github.com/smart-jemy/aether"
+
+# Deliberately OUTSIDE the Cargo workspace: building the Tauri shell needs
+# desktop webview system libraries (webkit2gtk on Linux, WebView2 on Windows)
+# that headless CI does not have. Build it on a desktop machine with
+# `cargo tauri build` (see ../aether-desktop/README.md).
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

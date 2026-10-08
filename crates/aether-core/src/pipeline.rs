@@ -64,7 +64,8 @@ impl Pipeline {
             flow_id: ctx.flow_id,
         });
 
-        for hook in self.registry.hooks() {
+        let hooks = self.registry.snapshot();
+        for hook in hooks.iter() {
             let before = req.fingerprint();
             let started = Instant::now();
             let fut = hook.on_request(ctx, req);
@@ -115,7 +116,8 @@ impl Pipeline {
             status: res.status.code,
         });
 
-        for hook in self.registry.hooks() {
+        let hooks = self.registry.snapshot();
+        for hook in hooks.iter() {
             let before = res.fingerprint();
             let started = Instant::now();
             let fut = hook.on_response(ctx, res);
@@ -158,7 +160,8 @@ impl Pipeline {
     /// `FlowCompleted` is emitted. `Stop` is ignored here by definition —
     /// the exchange is already over (documented in `HookAction::Stop`).
     pub async fn complete_flow(&self, ctx: &RequestContext, flow: &Flow) -> AetherResult<()> {
-        for hook in self.registry.hooks() {
+        let hooks = self.registry.snapshot();
+        for hook in hooks.iter() {
             let started = Instant::now();
             let fut = hook.on_flow_complete(ctx, flow);
             match tokio::time::timeout(self.hook_timeout, fut).await {
@@ -266,7 +269,7 @@ mod tests {
     #[tokio::test]
     async fn stop_halts_and_reports_stopped() {
         let bus = EventBus::new(64);
-        let mut reg = HookRegistry::new();
+        let reg = HookRegistry::new();
         reg.register_fn(Stopper);
         reg.register_fn(UaRewrite); // must NOT run
         let pipe = Pipeline::new(reg, bus.clone());
@@ -300,7 +303,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_is_enforced() {
         let bus = EventBus::new(16);
-        let mut reg = HookRegistry::new();
+        let reg = HookRegistry::new();
         reg.register_fn(Slow);
         let pipe = Pipeline::new(reg, bus).with_hook_timeout(Duration::from_millis(20));
 
@@ -313,7 +316,7 @@ mod tests {
     #[tokio::test]
     async fn modified_event_carries_hook_name() {
         let bus = EventBus::new(64);
-        let mut reg = HookRegistry::new();
+        let reg = HookRegistry::new();
         reg.register_fn(Tagger); // touches ctx only → no modified event
         reg.register_fn(UaRewrite); // touches request → modified event
         let pipe = Pipeline::new(reg, bus.clone());

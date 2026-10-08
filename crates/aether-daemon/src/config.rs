@@ -77,6 +77,18 @@ impl Default for AetherConfig {
 }
 
 impl AetherConfig {
+    /// One `UpstreamCfg` per consumer (proxy engine, replay, future tools) so
+    /// dial/timeout/capture semantics stay identical everywhere.
+    pub fn upstream_cfg(&self) -> aether_http::upstream::UpstreamCfg {
+        aether_http::upstream::UpstreamCfg {
+            capture_max_body: self.capture_max_body,
+            upstream_tls_verify: self.upstream_tls_verify,
+            host_overrides: self.host_overrides.clone(),
+            connect_timeout: std::time::Duration::from_secs(10),
+            response_timeout: std::time::Duration::from_secs(120),
+        }
+    }
+
     pub fn load(path: &std::path::Path) -> AetherResult<Self> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| AetherError::config(format!("read {}: {e}", path.display())))?;

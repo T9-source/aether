@@ -15,7 +15,6 @@ use aether_http::ca::CaManager;
 use aether_http::engine::FlowEngine;
 use aether_http::intercept::InterceptState;
 use aether_http::server::{ProxyCfg, ProxyServer};
-use aether_http::upstream::UpstreamCfg;
 use aether_store_sqlite::SqliteStore;
 use serde::Serialize;
 use std::net::SocketAddr;
@@ -68,12 +67,15 @@ pub async fn run(opts: DaemonOptions) -> AetherResult<DaemonInfo> {
         };
 
     // ── ca + rules + pipeline ───────────────────────────────────────────
+    // One live HookRegistry shared by the pipeline and the rules store:
+    // control-plane rule mutations re-project into the same registry the
+    // engine reads, so they apply to in-flight traffic (ADR-006 #1).
     let ca = Arc::new(CaManager::load_or_create(data_dir.join("ca"))?);
     let rules = Arc::new(RulesStore::load(&data_dir)?);
-    let mut registry = HookRegistry::new();
-    let rules_loaded = rules.register_into(&mut registry)?;
+    let registry = Arc::new(HookRegistry::new());
+    let rules_loaded = rules.register_into(&registry)?;
     let bus = EventBus::new(4096);
-    let pipeline = Pipeline::new(registry, bus.clone());
+    let pipeline = Pipeline::new((*registry).clone(), bus.clone());
 
     // ── intercept + engine ──────────────────────────────────────────────
     let intercept = Arc::new(InterceptState::new(
@@ -85,12 +87,7 @@ pub async fn run(opts: DaemonOptions) -> AetherResult<DaemonInfo> {
         pipeline,
         storage: storage.clone(),
         intercept: intercept.clone(),
-        upstream_cfg: UpstreamCfg {
-            capture_max_body: opts.config.capture_max_body,
-            upstream_tls_verify: opts.config.upstream_tls_verify,
-            host_overrides: opts.config.host_overrides.clone(),
-            ..Default::default()
-        },
+        upstream_cfg: opts.config.upstream_cfg(),
     });
 
     // ── proxy listener ──────────────────────────────────────────────────
@@ -135,7 +132,10 @@ pub async fn run(opts: DaemonOptions) -> AetherResult<DaemonInfo> {
         storage,
         intercept,
         rules,
+        registry: registry.clone(),
         ca: ca.clone(),
+        upstream: opts.config.upstream_cfg(),
+        proxy_addr: proxy_addr.to_string(),
         version: VERSION,
         started_at_unix_ms: aether_core::model::unix_millis_now(),
     });

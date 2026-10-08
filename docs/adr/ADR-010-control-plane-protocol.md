@@ -30,7 +30,7 @@ server → client   {"type":"response", "ok": true, "result": …}
    Mismatch → one error frame, then close. Comparison is constant-time.
 3. Post-auth: any number of requests; events are pushed anytime.
 
-**Ops (v1):** `ping`, `flows_list`, `flows_get`, `flows_search`, `stats_get`,
+**Ops (v1)** (amended by [ADR-012]: `flows_replay` added; `stats_get` carries `proxy_addr`; tauri webview origins allowlisted)**:** `ping`, `flows_list`, `flows_get`, `flows_search`, `stats_get`,
 `intercept_list`, `intercept_show`, `intercept_drop`, `intercept_release`,
 `intercept_set`, `rules_list`, `rules_add`, `rules_remove`,
 `rules_set_enabled`, `ca_export_pem`.

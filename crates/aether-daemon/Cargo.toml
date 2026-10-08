@@ -12,6 +12,7 @@ repository.workspace = true
 aether-core = { path = "../aether-core" }
 aether-http = { path = "../aether-http" }
 aether-store-sqlite = { path = "../aether-store-sqlite" }
+async-trait = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

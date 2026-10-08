@@ -346,7 +346,7 @@ async fn plain_http_flows_through_and_is_recorded() {
 #[tokio::test]
 async fn serialized_rules_modify_traffic() {
     let origin = spawn_plain_origin().await;
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register_fn(rule_from_json(serde_json::json!({
         "name": "stamp",
         "action": {"kind": "set_request_header", "name": "x-aether-ran", "value": "yes"}
@@ -601,7 +601,7 @@ async fn pass_through_tunnels_blindly_and_records_nothing() {
 
 #[tokio::test]
 async fn respond_with_rule_mocks_the_origin() {
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register_fn(rule_from_json(serde_json::json!({
         "name": "teapot",
         "host_include": ["mocked.example.com"],

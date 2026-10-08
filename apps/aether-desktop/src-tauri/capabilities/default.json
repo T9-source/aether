@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default window capabilities for the Aether shell. No filesystem, shell or network process plugins are enabled — the console talks to the daemon over WebSocket from the webview itself.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

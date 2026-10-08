@@ -41,6 +41,7 @@ dependencies = [
  "aether-core",
  "aether-http",
  "aether-store-sqlite",
+ "async-trait",
  "dirs",
  "futures-util",
  "getrandom 0.2.17",

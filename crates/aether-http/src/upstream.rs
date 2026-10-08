@@ -9,7 +9,7 @@
 //! framing regardless of what the origin spoke.
 
 use aether_core::error::{AetherError, AetherResult};
-use aether_core::model::{Body, Request, Response};
+use aether_core::model::{Request, Response};
 use rustls_pki_types::ServerName;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf};
@@ -200,7 +200,7 @@ pub async fn send_request(req: &Request, cfg: &UpstreamCfg) -> AetherResult<Upst
     let spec = wire::response_body_spec(&response.headers, response.status.code, request_was_head);
 
     let (body, remainder) = read_captured(reader, spec, cfg.capture_max_body).await?;
-    response.body = Body::binary(body);
+    response.body = wire::body_from_captured(body);
     Ok(UpstreamReply {
         response,
         remainder,

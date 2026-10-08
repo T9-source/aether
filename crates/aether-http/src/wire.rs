@@ -425,6 +425,19 @@ async fn drain_trailers<R: AsyncBufRead + Unpin>(reader: &mut R) -> AetherResult
     Err(AetherError::protocol("trailer section too large"))
 }
 
+/// A captured body becomes `Text` exactly when the bytes are valid UTF-8 —
+/// otherwise it stays `Binary` (base64 on the control plane). This keeps
+/// stored flows human-inspectable, lets text-only rules (body rewrite) fire,
+/// and is wire-equivalent for forwarding (`Body::as_bytes`).
+pub fn body_from_captured(bytes: Vec<u8>) -> Body {
+    match String::from_utf8(bytes) {
+        Ok(text) => Body::Text { text },
+        Err(e) => Body::Binary {
+            bytes: e.into_bytes(),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // response parsing
 // ---------------------------------------------------------------------------
@@ -603,6 +616,20 @@ mod tests {
         let mut r = parse_request_head(head.as_bytes(), None, None).unwrap();
         r.body = Body::binary(body.to_vec());
         r
+    }
+
+    #[test]
+    fn body_from_captured_splits_on_utf8_validity() {
+        assert_eq!(
+            super::body_from_captured(b"{\"ok\":true}".to_vec()),
+            Body::text("{\"ok\":true}")
+        );
+        let binary = vec![0x00, 0xff, 0xfe, 0x01];
+        assert!(matches!(
+            super::body_from_captured(binary.clone()),
+            Body::Binary { .. }
+        ));
+        assert_eq!(super::body_from_captured(Vec::new()), Body::text(""));
     }
 
     #[test]

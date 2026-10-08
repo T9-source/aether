@@ -9,10 +9,12 @@
 //! - server-pushed frames are `{"type":"event","event":{...AetherEvent...}}`.
 
 use aether_core::error::{AetherError, AetherResult};
+use aether_core::hooks::HookRegistry;
 use aether_core::storage::{FlowQuery, FlowStats, Storage};
 use aether_core::{EventBus, InterceptDirection, RuleSpec};
 use aether_http::ca::CaManager;
 use aether_http::intercept::{HeldDecision, HeldPayload, InterceptState};
+use aether_http::upstream::UpstreamCfg;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -32,7 +34,14 @@ pub struct ControlShared {
     pub storage: Arc<dyn Storage>,
     pub intercept: Arc<InterceptState>,
     pub rules: Arc<RulesStore>,
+    /// The live hook registry the engine reads; rule mutations re-project
+    /// into it via `RulesStore::sync_into` (ADR-006 #1).
+    pub registry: Arc<HookRegistry>,
     pub ca: Arc<CaManager>,
+    pub upstream: UpstreamCfg,
+    /// Human-readable proxy listener (the UI status bar shows it — users
+    /// need to know where to point their clients).
+    pub proxy_addr: String,
     pub version: &'static str,
     pub started_at_unix_ms: u64,
 }
@@ -87,6 +96,12 @@ pub enum ControlRequest {
         enabled: bool,
     },
     CaExportPem,
+    /// Re-execute a (possibly edited) request with no client leg (ADR-012).
+    /// The flow id is reserved and returned immediately; execution continues
+    /// in the background so a slow origin never stalls the control plane.
+    FlowsReplay {
+        request: aether_core::model::Request,
+    },
 }
 
 /// Operator decision for a held flow: forward (possibly edited) or drop.
@@ -144,6 +159,9 @@ pub struct StatsInfo {
     pub rules: usize,
     pub uptime_ms: u64,
     pub version: String,
+    /// The explicit-proxy listener, e.g. "127.0.0.1:8888".
+    #[serde(default)]
+    pub proxy_addr: String,
 }
 
 pub async fn run(
@@ -175,23 +193,25 @@ pub async fn run(
 }
 
 fn origin_allowed(origin: &str) -> bool {
-    // Accept only loopback origins (any port) — the GUI/dev-tooling case.
+    // Loopback origins (any port) — browser dev tooling.
     let rest = origin
         .strip_prefix("http://")
         .or_else(|| origin.strip_prefix("https://"))
         .or_else(|| origin.strip_prefix("ws://"))
         .or_else(|| origin.strip_prefix("wss://"));
-    match rest {
-        Some(host_port) => {
-            let host = host_port
-                .rsplit_once(':')
-                .map(|(h, _)| h)
-                .unwrap_or(host_port);
-            let host = host.trim_start_matches('[').trim_end_matches(']');
-            host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+    if let Some(host_port) = rest {
+        let host = host_port
+            .rsplit_once(':')
+            .map(|(h, _)| h)
+            .unwrap_or(host_port);
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        if host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1" {
+            return true;
         }
-        None => false,
     }
+    // Tauri desktop shell (ADR-012): the packaged UI's webview origin.
+    // Exact match only — no wildcard schemes, no remote hosts.
+    origin == "tauri://localhost" || origin == "https://tauri.localhost"
 }
 
 #[allow(clippy::result_large_err)] // tungstenite's own ErrorResponse shape
@@ -332,6 +352,7 @@ async fn dispatch(
                 uptime_ms: aether_core::model::unix_millis_now()
                     .saturating_sub(shared.started_at_unix_ms),
                 version: shared.version.to_string(),
+                proxy_addr: shared.proxy_addr.clone(),
             };
             serde_json::to_value(stats).map_err(|e| AetherError::protocol(e.to_string()))?
         }
@@ -381,13 +402,72 @@ async fn dispatch(
             .map_err(|e| AetherError::protocol(e.to_string()))?,
         RulesAdd { spec } => {
             let id = shared.rules.add(spec)?;
+            shared.rules.sync_into(&shared.registry)?;
             serde_json::json!({"id": id})
         }
-        RulesRemove { id } => serde_json::json!({"removed": shared.rules.remove(id)}),
+        RulesRemove { id } => {
+            let removed = shared.rules.remove(id);
+            if removed {
+                shared.rules.sync_into(&shared.registry)?;
+            }
+            serde_json::json!({"removed": removed})
+        }
         RulesSetEnabled { id, enabled } => {
-            serde_json::json!({"changed": shared.rules.set_enabled(id, enabled)})
+            let changed = shared.rules.set_enabled(id, enabled);
+            if changed {
+                shared.rules.sync_into(&shared.registry)?;
+            }
+            serde_json::json!({"changed": changed})
         }
         CaExportPem => serde_json::json!({"pem": shared.ca.ca_cert_pem()}),
+        FlowsReplay { request } => {
+            let flow_id = shared.storage.alloc_id().await?;
+            let storage = shared.storage.clone();
+            let bus = shared.bus.clone();
+            let cfg = shared.upstream.clone();
+            tokio::spawn(async move {
+                if let Err(e) = crate::replay::run_replay(request, flow_id, storage, bus, cfg).await
+                {
+                    tracing::warn!(%flow_id, error = %e, "replay failed");
+                }
+            });
+            serde_json::json!({"flow_id": flow_id})
+        }
     };
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn origin_allows_loopback_any_port() {
+        assert!(origin_allowed("http://localhost:5173"));
+        assert!(origin_allowed("http://127.0.0.1:3000"));
+        assert!(origin_allowed("ws://localhost:9099"));
+        assert!(origin_allowed("http://[::1]:8080"));
+        assert!(origin_allowed("http://localhost"));
+    }
+
+    #[test]
+    fn origin_allows_tauri_shell_only() {
+        assert!(origin_allowed("tauri://localhost"));
+        assert!(origin_allowed("https://tauri.localhost"));
+        // lookalikes must fail
+        assert!(!origin_allowed("tauri://evil.com"));
+        assert!(!origin_allowed("tauri://localhost.evil.com"));
+        assert!(!origin_allowed("https://tauri.localhost.evil.com"));
+    }
+
+    #[test]
+    fn origin_rejects_remote_and_garbage() {
+        assert!(!origin_allowed("http://evil.com"));
+        assert!(!origin_allowed("http://localhost.evil.com"));
+        assert!(!origin_allowed("https://127.0.0.1.evil.com:9099"));
+        assert!(!origin_allowed("file:///home/user"));
+        assert!(!origin_allowed(""));
+        // custom app-scheme origins (Electron-style) are not trusted
+        assert!(!origin_allowed("app://aether"));
+    }
 }

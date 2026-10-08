@@ -73,7 +73,7 @@ fn sample() -> Request {
 #[tokio::test]
 async fn the_phase_zero_architectural_proof() {
     let bus = EventBus::new(128);
-    let mut registry = HookRegistry::new();
+    let registry = HookRegistry::new();
     registry.register_fn(HookA);
     registry.register_fn(HookB);
     registry.register_fn(HookC);
@@ -154,7 +154,7 @@ async fn same_core_serves_two_clients_without_ui() {
                 Ok(HookAction::Continue)
             }
         }
-        let mut reg = HookRegistry::new();
+        let reg = HookRegistry::new();
         reg.register_fn(P(name));
         Pipeline::new(reg, bus.clone())
     };
@@ -204,7 +204,7 @@ async fn stop_action_drops_the_exchange() {
         }
     }
 
-    let mut reg = HookRegistry::new();
+    let reg = HookRegistry::new();
     reg.register_fn(Firewall);
     let pipe = Pipeline::new(reg, EventBus::new(16)).with_hook_timeout(Duration::from_secs(1));
 

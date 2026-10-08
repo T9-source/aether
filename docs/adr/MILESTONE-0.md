@@ -1,6 +1,6 @@
 # Milestone 0 — Acceptance Criteria: "The Birth of Aether"
 
-- **Status:** Phase 1 shipped — M0.2 verified where V0.1 scope applies (see per-criterion status)
+- **Status:** Phase 2 shipped — criteria verified where V0.1/V0.2 scope applies (see per-criterion status)
 - **Date:** 2026-10-08 (criteria), 2026-10-08 (status update)
 - **Author:** smart-jemy
 
@@ -14,21 +14,21 @@ This milestone proves we have a **real product**, not an architecture diagram.
 
 ## M0.1 — The Birth Moment (hard gate)
 
-| # | Criterion | Status (Phase 1, V0.1) |
+| # | Criterion | Status (Phase 2, V0.2) |
 |---|-----------|------------------------|
 | 1 | `aether serve` starts headless and stays running | ✅ **verified** (`aether serve --memory --listen …`, banner + token + CA paths printed) |
-| 2 | Tauri app connects over the control plane | ⏳ **deferred** (Tauri is V0.2+; the *protocol* it will use is shipped and tested — ADR-010) |
+| 2 | Tauri app connects over the control plane | ✅ **verified (Phase 2)**: the console UI (browser build) connects over protocol v1 with live history/intercept/replay/rules; the Tauri 2 shell (`apps/aether-desktop`) wraps the same UI, same ops, tauri origin allowlisted (ADR-012) |
 | 3 | Browser → HTTPS site → visible, **zero cert errors** after CA install | ✅ **verified**: curl-via-proxy to `https://example.com` with the Aether CA → 200, flow recorded; MITM chain e2e-tested with a client trusting *only* the Aether CA |
-| 4 | **Kill the UI: proxying continues** | ✅ **by construction**: the CLI is a WS client only; proxy loop shares nothing with it (`crates/aether-daemon` wires them independently) |
+| 4 | **Kill the UI: proxying continues** | ✅ **verified from both directions**: daemon runs with no UI at all; the console is a stateless WS client with no privileged backdoor (closing the tab never touches a capture) |
 | 5 | h3-serving site passes with silent TCP fallback | ✅ **by design**: browsers cannot use QUIC through an explicit HTTP proxy — they fall back to h1 over TCP automatically (ADR-007 `aether net quic-block` remains a hardening nicety) |
 
 ## M0.2 — Operational Criteria (hard gate)
 
-| # | Criterion | Status (Phase 1, V0.1) |
+| # | Criterion | Status (Phase 2, V0.2) |
 |---|-----------|------------------------|
-| 6 | **Intercept from both clients** | ✅ **CLI verified end-to-end** (hold → edit → forward, hold → drop; over the WS control plane with `intercept_hold`/`intercept_released` events). UI leg lands with the Tauri app on the same ops |
+| 6 | **Intercept from both clients** | ✅ **both legs verified end-to-end**: CLI (hold → edit → forward, hold → drop) and console UI (hold → structured edit → forward — the origin echoed the console's edits; drop), same ops, same events (ADR-010/012) |
 | 7 | **Scope + pass-through** | ✅ pass-through verified (pinned-style domain tunneled blindly, `PassThrough` event, nothing recorded); host scoping ships via `RuleSpec.host_include/exclude` |
-| 8 | **Match & Replace through the HookRegistry** | ✅ verified (JSON `RuleSpec` → `RuleHook`, stamps headers/rewrites paths, tags flows — proven over the control plane too) |
+| 8 | **Match & Replace through the HookRegistry** | ✅ verified (JSON `RuleSpec` → `RuleHook`, stamps headers/rewrites paths, tags flows, mocks responses). Phase 2: edits apply to in-flight traffic with **no restart** (live registry, ADR-012) — proven by authoring a mock rule in the console and getting 418 + mock body from a matched host while unmatched hosts passed through |
 | 9 | **Persistence survives restart** | ✅ SQLite (WAL, full-fidelity records) verified; `flows_list`/`flows_get` after re-open covered by store tests |
 | 10 | **Scale smoke test: 100k flows, keyset pagination** | ✅ **verified**: 100,000 flows inserted at ~12k/s; page-of-50 reads **p50 = 0.51 ms, p95 = 0.80 ms**; FTS5 search over 100k in ~67 ms (`aether bench flows --n 100000`) |
 | 11 | **Latency measurement exists** | ⏳ partial: per-flow `duration_ms` recorded + bench timings exist; the dedicated proxy-overhead bench (passthrough vs direct) lands with V0.1 exit review |
