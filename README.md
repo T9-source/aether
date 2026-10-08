@@ -42,6 +42,8 @@ In the console: live history (virtualized), full request/response viewer
 forward/drop with structured editors, one-click replay of any request
 (plus a dedicated replay editor), and live match & replace rules with
 mock/rewrite/tag actions — all driving the same daemon the CLI talks to.
+V0.2 adds an **HTTP/2** chip + `alpn` fact per flow and a **WebSocket tab**
+(direction ↑/↓, kind, size, preview — recorded sessions live on the flow).
 A Tauri 2 desktop shell wraps the same UI (`apps/aether-desktop`, built on
 desktop machines — see its README).
 
@@ -120,15 +122,15 @@ aether/
 5. The proxy owns its bytes: hand-rolled h1 codec, original header order and
    casing preserved, ambiguous framings refused loudly (ADR-009).
 
-## Roadmap (frozen ladder)
+## Roadmap (frozen ladder — see `docs/adr/README.md`)
 
 | Version | Scope | Status |
 |---------|-------|--------|
-| V0.1 | h1 + TLS MITM + history + intercept + rules + control plane | ✅ shipped (Phase 1) |
-| V0.2 | **console UI + Tauri shell + replay + live rules** | ✅ **shipped (Phase 2)** |
-| V0.3 | h2 inspection, WebSocket, upstream pooling, spooling | next |
-| V0.4 | WASM plugins (Extism) + plugin SDK | planned |
-| V1.0 | query language, fuzzing, automation, AI layer (BYO-key, off by default) | planned |
+| V0.1 | Usable MVP: h1 + TLS MITM + history + intercept + replay + rules + SQLite + control plane + console | ✅ shipped (Phases 0–2) |
+| — | **V0 dogfoodable**: latency bench, soak harness, demo script, LIMITATIONS doc | ✅ shipped (Phase 3A) |
+| V0.2 | Modern Web: **HTTP/2 (ALPN, streams) + WebSocket inspection** | ✅ **shipped (Phase 3B)** |
+| V0.3 | Extensibility: WASM plugin host (Extism), permissions, SDK | next |
+| V1.0 | Security platform: query language, tagging, fuzzing, automation, AI layer (BYO-key, off by default) | planned |
 
 ## Founder
 

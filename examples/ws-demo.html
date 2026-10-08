@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- Aether V0.2 demo page: opens a WebSocket through the system proxy
+     (Chrome routes ws:// through the HTTP proxy with an absolute-form
+     upgrade request — exactly what Aether's relay expects). -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Aether WS demo</title>
+    <style>
+      body { font-family: ui-monospace, monospace; background: #14161b; color: #d7dce4; padding: 24px; }
+      button { padding: 8px 14px; border-radius: 6px; border: 1px solid #3a4150; background: #1d2129; color: #d7dce4; cursor: pointer; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h2>Aether — live WebSocket demo</h2>
+    <button id="go">open ws://127.0.0.1:7002/ws and send 3 messages</button>
+    <pre id="log"></pre>
+    <script>
+      const log = (m) => (document.getElementById("log").textContent += m + "\n");
+      document.getElementById("go").onclick = () => {
+        const ws = new WebSocket("ws://127.0.0.1:7002/ws");
+        ws.onopen = () => {
+          log("OPEN ws://127.0.0.1:7002/ws (through the Aether proxy)");
+          ws.send("hello-from-browser");
+          ws.send(JSON.stringify({ kind: "greeting", n: 1, via: "aether" }));
+          ws.send("closing soon");
+          setTimeout(() => ws.close(1000, "done"), 400);
+        };
+        ws.onmessage = (e) => log("ECHO ← " + e.data);
+        ws.onclose = (e) => log("CLOSED code=" + e.code + " reason=" + e.reason);
+        ws.onerror = () => log("ERROR");
+      };
+    </script>
+  </body>
+</html>

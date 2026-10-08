@@ -19,6 +19,11 @@ response = false
 # Certificate-pinned / sensitive domains: tunneled blindly, never recorded (ADR-004)
 passthrough = []
 
+# V0.2 (ADR-013): offer HTTP/2 on the upstream leg (default true).
+# Turn off to force h1 upstream — handy for origins that misbehave behind
+# h2 proxies. WebSocket upgrades always dial h1 (an upgrade is an h1 mechanism).
+upstream_alpn_h2 = true
+
 # Lab-only knobs (ADR-011)
 upstream_tls_verify = true
 capture_max_body = 8388608            # 8 MiB per body

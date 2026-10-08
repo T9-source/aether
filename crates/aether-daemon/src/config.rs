@@ -19,6 +19,9 @@ pub struct AetherConfig {
     pub host_overrides: BTreeMap<String, String>,
     /// Validate upstream certificates (turn off only for labs).
     pub upstream_tls_verify: bool,
+    /// Offer HTTP/2 on the upstream leg (V0.2, ADR-013). Turn off to force
+    /// h1 upstream — handy for origins that misbehave behind h2 proxies.
+    pub upstream_alpn_h2: bool,
     /// Per-body capture limit in bytes (ADR-011).
     pub capture_max_body: usize,
 }
@@ -71,6 +74,7 @@ impl Default for AetherConfig {
             passthrough: Vec::new(),
             host_overrides: BTreeMap::new(),
             upstream_tls_verify: true,
+            upstream_alpn_h2: true,
             capture_max_body: 8 * 1024 * 1024,
         }
     }
@@ -83,6 +87,7 @@ impl AetherConfig {
         aether_http::upstream::UpstreamCfg {
             capture_max_body: self.capture_max_body,
             upstream_tls_verify: self.upstream_tls_verify,
+            alpn_h2: self.upstream_alpn_h2,
             host_overrides: self.host_overrides.clone(),
             connect_timeout: std::time::Duration::from_secs(10),
             response_timeout: std::time::Duration::from_secs(120),

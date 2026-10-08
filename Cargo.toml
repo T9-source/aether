@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.85"
@@ -38,6 +38,11 @@ rcgen = { version = "0.13", default-features = false, features = ["pem", "ring",
 time = "0.3"
 # --- control plane (ADR-002): WebSocket + JSON ---
 tokio-tungstenite = "0.24"
+# --- HTTP/2 (V0.2, ADR-013): the h2 crate for connection/stream machinery
+# (HPACK, flow control, frames); wire truth lives in our model layer
+h2 = "0.4"
+http = "1"
+bytes = "1"
 # --- storage (ADR-005): SQLite via sqlx, runtime API (no macros) ---
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
 dirs = "5"

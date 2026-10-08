@@ -91,6 +91,9 @@ pub struct UpstreamCfg {
     pub capture_max_body: usize,
     /// Validate upstream certificates (default true; off = lab mode).
     pub upstream_tls_verify: bool,
+    /// Offer h2 on the upstream TLS leg (V0.2, ADR-013). Responses arrive
+    /// with `HttpVersion::Http2` when the origin negotiates it.
+    pub alpn_h2: bool,
     /// `"host"` or `"host:port"` → `"socket://host:port"` dial override
     /// (labs, replay against local mocks).
     pub host_overrides: std::collections::BTreeMap<String, String>,
@@ -103,6 +106,7 @@ impl Default for UpstreamCfg {
         Self {
             capture_max_body: 8 * 1024 * 1024,
             upstream_tls_verify: true,
+            alpn_h2: true,
             host_overrides: Default::default(),
             connect_timeout: Duration::from_secs(10),
             response_timeout: Duration::from_secs(120),
@@ -153,8 +157,66 @@ fn server_name_for(host: &str) -> AetherResult<ServerName<'static>> {
 }
 
 /// Sends the request upstream and returns the captured response + optional
-/// streaming remainder.
+/// streaming remainder. The upstream leg is protocol-aware (V0.2, ADR-013):
+/// when the origin negotiates h2 via ALPN the exchange is carried on h2
+/// streams, transparently to the engine — the model is the same either way.
 pub async fn send_request(req: &Request, cfg: &UpstreamCfg) -> AetherResult<UpstreamReply> {
+    let host = req.url.host.clone();
+    let port = req.url.effective_port();
+    let use_tls = req.url.scheme.eq_ignore_ascii_case("https");
+
+    let tcp = dial(&host, port, cfg).await?;
+    let stream = if use_tls {
+        let alpn: &[&[u8]] = if cfg.alpn_h2 {
+            tls::ALPN_H2_H1
+        } else {
+            tls::ALPN_H1
+        };
+        let connector = TlsConnector::from(Arc::new(tls::upstream_client_config_with_alpn(
+            cfg.upstream_tls_verify,
+            alpn,
+        )?));
+        let server_name = server_name_for(&host)?;
+        let tls_stream =
+            tokio::time::timeout(cfg.connect_timeout, connector.connect(server_name, tcp))
+                .await
+                .map_err(|_| AetherError::tls(format!("tls handshake timeout to {host}")))?
+                .map_err(|e| AetherError::tls(format!("tls handshake to {host}: {e}")))?;
+        let negotiated_h2 = tls_stream
+            .get_ref()
+            .1
+            .alpn_protocol()
+            .map(|p| p == b"h2")
+            .unwrap_or(false);
+        if negotiated_h2 {
+            return crate::h2x::client_exchange(tls_stream, req, cfg).await;
+        }
+        UpstreamStream::Tls(tls_stream)
+    } else {
+        UpstreamStream::Tcp(tcp)
+    };
+
+    h1_exchange(stream, req, cfg, false).await
+}
+
+/// Result of [`open_upgrade`] — the WebSocket handshake attempt.
+#[allow(clippy::large_enum_variant)]
+pub enum UpgradeReply {
+    /// The origin answered `101`: the stream below is now a raw duplex
+    /// WebSocket socket (frames, not HTTP).
+    Upgraded {
+        response: Response,
+        stream: UpstreamStream,
+    },
+    /// The origin refused the upgrade — a fully-read normal reply.
+    Rejected { reply: UpstreamReply },
+}
+
+/// Opens an h1 WebSocket upgrade against the origin (RFC 6455; ADR-013).
+/// Always dials with **h1-only** ALPN: an upgrade is an h1 mechanism and h2
+/// has no equivalent on this path. On `101` the socket is returned as-is —
+/// the caller becomes the relay (see `crate::ws`).
+pub async fn open_upgrade(req: &Request, cfg: &UpstreamCfg) -> AetherResult<UpgradeReply> {
     let host = req.url.host.clone();
     let port = req.url.effective_port();
     let use_tls = req.url.scheme.eq_ignore_ascii_case("https");
@@ -175,6 +237,56 @@ pub async fn send_request(req: &Request, cfg: &UpstreamCfg) -> AetherResult<Upst
         UpstreamStream::Tcp(tcp)
     };
 
+    let bytes = wire::serialize_request_upgrade(req);
+    let mut stream = stream;
+    tokio::time::timeout(cfg.response_timeout, async {
+        stream.write_all(&bytes).await?;
+        stream.flush().await
+    })
+    .await
+    .map_err(|_| AetherError::network("upstream write timeout"))?
+    .map_err(|e| AetherError::network(format!("upstream write: {e}")))?;
+
+    let mut reader = BufReader::new(stream);
+    let head = tokio::time::timeout(
+        cfg.response_timeout,
+        wire::read_until_needle(&mut reader, b"\r\n\r\n", wire::MAX_HEAD_BYTES),
+    )
+    .await
+    .map_err(|_| AetherError::network("upstream response head timeout"))?
+    .and_then(|o| o.ok_or_else(|| AetherError::network("upstream closed before response head")))?;
+
+    let response = wire::parse_response_head(&head, false)?;
+    if response.status.code == 101 {
+        // keep the socket — the relay takes it from here
+        return Ok(UpgradeReply::Upgraded {
+            response,
+            stream: reader.into_inner(),
+        });
+    }
+
+    let mut response = response;
+    wire::strip_hop_by_hop(&mut response.headers);
+    let spec = wire::response_body_spec(&response.headers, response.status.code, false);
+    let (body, remainder) = read_captured(reader, spec, cfg.capture_max_body).await?;
+    response.body = wire::body_from_captured(body);
+    Ok(UpgradeReply::Rejected {
+        reply: UpstreamReply {
+            response,
+            remainder,
+        },
+    })
+}
+
+/// The h1 wire exchange (pre-V0.2 `send_request` body, factored out so the
+/// h2 dispatch can share the framing helpers).
+async fn h1_exchange(
+    stream: UpstreamStream,
+    req: &Request,
+    cfg: &UpstreamCfg,
+    request_was_head_override: bool,
+) -> AetherResult<UpstreamReply> {
+    let _ = request_was_head_override;
     let bytes = wire::serialize_request(req);
     let mut stream = stream;
     tokio::time::timeout(cfg.response_timeout, async {

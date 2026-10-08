@@ -1,0 +1,696 @@
+//! Aether — V0.2 end-to-end tests (ADR-013).
+//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//!
+//! Real sockets, real TLS, real h2 handshakes, real WebSocket frames:
+//! - h2 client leg ↔ h2 upstream (the browser-to-modern-origin path)
+//! - h2 client leg downgraded to an h1 upstream
+//! - h1 client leg upgraded to an h2 upstream
+//! - a `wss://` WebSocket upgraded through the engine, relayed frame by
+//!   frame, and recorded on the flow
+//!
+//! The rule under test: the protocol of the legs never changes what the
+//! engine sees — flows, events, rules and intercept behave identically.
+
+use aether_core::storage::{FlowQuery, MemoryStorage, Storage};
+use aether_core::{EventBus, HookRegistry, Pipeline};
+use aether_http::ca::CaManager;
+use aether_http::engine::FlowEngine;
+use aether_http::intercept::InterceptState;
+use aether_http::server::{ProxyCfg, ProxyServer};
+use aether_http::upstream::UpstreamCfg;
+use aether_http::wire;
+use futures_util::{SinkExt, StreamExt};
+use rustls::ClientConfig;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
+use tokio_tungstenite::tungstenite::Message;
+
+// ── harness (mirrors proxy_e2e.rs) ──────────────────────────────────────────
+
+#[allow(dead_code)] // bus kept for symmetry with the phase-1 harness
+struct TestProxy {
+    addr: SocketAddr,
+    storage: Arc<MemoryStorage>,
+    bus: EventBus,
+    _shutdown_tx: watch::Sender<bool>,
+}
+
+async fn spawn_proxy(alpn_h2: bool) -> TestProxy {
+    let ca_dir = tempfile::TempDir::new().unwrap();
+    let ca = Arc::new(CaManager::load_or_create(ca_dir.path()).unwrap());
+    let bus = EventBus::new(1024);
+    let storage = Arc::new(MemoryStorage::new());
+    let engine = Arc::new(FlowEngine {
+        bus: bus.clone(),
+        pipeline: Pipeline::new(HookRegistry::new(), bus.clone()),
+        storage: storage.clone(),
+        intercept: Arc::new(InterceptState::new(false, false)),
+        upstream_cfg: UpstreamCfg {
+            upstream_tls_verify: false, // test origins are self-signed
+            alpn_h2,
+            ..Default::default()
+        },
+    });
+    let (tx, rx) = watch::channel(false);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = Arc::new(ProxyServer {
+        engine,
+        ca,
+        cfg: ProxyCfg {
+            idle_timeout: Duration::from_secs(30),
+            ..Default::default()
+        },
+        shutdown: rx,
+    });
+    tokio::spawn(server.serve(listener));
+    TestProxy {
+        addr,
+        storage,
+        bus,
+        _shutdown_tx: tx,
+    }
+}
+
+/// Lab client: accepts any origin cert (the test origins are self-signed).
+/// ALPN is explicit per test — it decides which client leg the proxy serves.
+fn client_config_alpn(alpn: &[&[u8]], _insecure: bool) -> Arc<ClientConfig> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let versions = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap();
+    let cfg = versions
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(aether_http::tls::NoVerify))
+        .with_no_client_auth();
+    let mut cfg = cfg;
+    cfg.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
+    Arc::new(cfg)
+}
+
+/// CONNECT → returns the raw tunnel.
+async fn connect_tunnel(proxy: SocketAddr, authority: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(proxy).await.unwrap();
+    let connect_req = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n\r\n");
+    stream.write_all(connect_req.as_bytes()).await.unwrap();
+    let mut buf = [0u8; 1024];
+    let n = stream.read(&mut buf).await.unwrap();
+    assert!(
+        String::from_utf8_lossy(&buf[..n]).contains("200"),
+        "CONNECT must succeed: {}",
+        String::from_utf8_lossy(&buf[..n])
+    );
+    stream
+}
+
+fn server_name_for(authority: &str) -> ServerName<'static> {
+    let host = authority
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(authority);
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        ServerName::IpAddress(ip.into())
+    } else {
+        ServerName::try_from(host.to_string()).unwrap()
+    }
+}
+
+async fn tls_connect(
+    stream: TcpStream,
+    authority: &str,
+    cfg: Arc<ClientConfig>,
+) -> tokio_rustls::client::TlsStream<TcpStream> {
+    tokio_rustls::TlsConnector::from(cfg)
+        .connect(server_name_for(authority), stream)
+        .await
+        .unwrap()
+}
+
+/// Latest recorded flow (or None while the engine is still writing it).
+async fn latest_flow(proxy: &TestProxy) -> Option<aether_core::model::Flow> {
+    let page = proxy
+        .storage
+        .list_flows(FlowQuery {
+            limit: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let id = page.items.first().map(|s| s.id)?;
+    proxy.storage.get_flow(id).await.unwrap()
+}
+
+// ── origins ────────────────────────────────────────────────────────────────
+
+fn self_signed(name: &str) -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
+    let key = rcgen::KeyPair::generate().unwrap();
+    let mut params =
+        rcgen::CertificateParams::new(vec![name.to_string(), "127.0.0.1".to_string()]).unwrap();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, name);
+    let cert = params.self_signed(&key).unwrap();
+    (
+        CertificateDer::from(cert.der().to_vec()),
+        PrivateKeyDer::Pkcs8(rustls::pki_types::PrivatePkcs8KeyDer::from(
+            key.serialize_der(),
+        )),
+    )
+}
+
+fn tls_acceptor_for(name: &str, alpn: &[&[u8]]) -> tokio_rustls::TlsAcceptor {
+    let (cert, key) = self_signed(name);
+    let mut cfg = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert], key)
+        .unwrap();
+    cfg.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
+    tokio_rustls::TlsAcceptor::from(Arc::new(cfg))
+}
+
+/// An HTTP/2 origin: answers every request stream with a JSON echo.
+async fn spawn_h2_origin(name: &str) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let acceptor = tls_acceptor_for(name, &[b"h2"]);
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let Ok(tls) = acceptor.accept(stream).await else {
+                    return;
+                };
+                let mut conn = match h2::server::handshake(tls).await {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+                while let Some(Ok((req, mut respond))) = conn.accept().await {
+                    let (parts, _) = req.into_parts();
+                    let body = format!(
+                        "{{\"method\":\"{}\",\"path\":\"{}\",\"origin\":\"h2\"}}",
+                        parts.method,
+                        parts.uri.path()
+                    );
+                    let resp = http::Response::builder()
+                        .status(200)
+                        .header("x-h2-origin", "yes")
+                        .header("content-type", "application/json")
+                        .body(())
+                        .unwrap();
+                    let Ok(mut send) = respond.send_response(resp, false) else {
+                        continue;
+                    };
+                    let _ = send.send_data(body.into(), true);
+                }
+            });
+        }
+    });
+    addr
+}
+
+/// An HTTP/1.1 origin over TLS (ALPN h1) — the h1 side of downgrade tests.
+async fn spawn_h1_tls_origin(name: &str) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let acceptor = tls_acceptor_for(name, &[b"http/1.1"]);
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let Ok(tls) = acceptor.accept(stream).await else {
+                    return;
+                };
+                let mut reader = tokio::io::BufReader::new(tls);
+                let Some(head) = wire::read_until_needle(&mut reader, b"\r\n\r\n", 64 * 1024)
+                    .await
+                    .ok()
+                    .flatten()
+                else {
+                    return;
+                };
+                let text = String::from_utf8_lossy(&head);
+                let path = text.split(' ').nth(1).unwrap_or("/").to_string();
+                let body = format!("{{\"origin\":\"h1\",\"path\":\"{path}\"}}");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nx-origin: h1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                reader.get_mut().write_all(response.as_bytes()).await.ok();
+            });
+        }
+    });
+    addr
+}
+
+/// A WebSocket origin over TLS (wss): echoes text/binary messages.
+async fn spawn_wss_origin(name: &str) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let acceptor = tls_acceptor_for(name, &[b"http/1.1"]);
+    tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let Ok(tls) = acceptor.accept(stream).await else {
+                    return;
+                };
+                let Ok(ws) = tokio_tungstenite::accept_async(tls).await else {
+                    return;
+                };
+                let (mut sink, mut source) = ws.split();
+                while let Some(Ok(msg)) = source.next().await {
+                    match msg {
+                        Message::Text(_) | Message::Binary(_) => {
+                            if sink.send(msg).await.is_err() {
+                                return;
+                            }
+                        }
+                        Message::Close(_) => {
+                            let _ = sink.send(Message::Close(None)).await;
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+    });
+    addr
+}
+
+// ── the tests ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn h2_client_to_h2_origin_is_transparent() {
+    let origin = spawn_h2_origin("h2.local").await;
+    let proxy = spawn_proxy(true).await;
+
+    let authority = format!("127.0.0.1:{}", origin.port());
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"h2"], true)).await;
+
+    let (send_request, connection) = h2::client::handshake(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let mut send_request = send_request.ready().await.unwrap();
+    let request = http::Request::builder()
+        .method("GET")
+        .uri(format!("https://{authority}/api/thing?q=1"))
+        .body(())
+        .unwrap();
+    let (response_fut, _send) = send_request.send_request(request, true).unwrap();
+    let resp = response_fut.await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        resp.headers().get("x-h2-origin").map(|v| v.as_bytes()),
+        Some(&b"yes"[..])
+    );
+    let mut recv = resp.into_body();
+    let mut body = Vec::new();
+    while let Some(data) = std::future::poll_fn(|cx| recv.poll_data(cx)).await {
+        let chunk = data.unwrap();
+        let _ = recv.flow_control().release_capacity(chunk.len());
+        body.extend_from_slice(&chunk);
+    }
+    let text = String::from_utf8_lossy(&body).into_owned();
+    assert!(text.contains("/api/thing"), "{text}");
+    assert!(text.contains("\"origin\":\"h2\""), "{text}");
+
+    // the flow must be recorded with h2 semantics on the client leg
+    let mut deadline = 30;
+    let flow = loop {
+        if let Some(f) = latest_flow(&proxy).await {
+            if f.response.is_some() {
+                break f;
+            }
+        }
+        deadline -= 1;
+        assert!(deadline > 0, "flow never recorded");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let req = flow.request.as_ref().unwrap();
+    assert_eq!(req.version, aether_core::model::HttpVersion::Http2);
+    assert_eq!(req.url.host, "127.0.0.1");
+    assert_eq!(req.url.path, "/api/thing");
+    assert_eq!(req.url.query.as_deref(), Some("q=1"));
+    assert_eq!(flow.response.as_ref().unwrap().status.code, 200);
+    assert_eq!(
+        flow.meta.tls.as_ref().and_then(|t| t.alpn.as_deref()),
+        Some("h2"),
+        "client-leg ALPN recorded"
+    );
+}
+
+#[tokio::test]
+async fn h2_client_leg_downgrades_to_h1_upstream() {
+    let origin = spawn_h1_tls_origin("h1origin.local").await;
+    let proxy = spawn_proxy(true).await;
+
+    let authority = format!("127.0.0.1:{}", origin.port());
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"h2"], true)).await;
+
+    let (send_request, connection) = h2::client::handshake(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let mut send_request = send_request.ready().await.unwrap();
+    let request = http::Request::builder()
+        .method("GET")
+        .uri(format!("https://{authority}/down?x=2"))
+        .body(())
+        .unwrap();
+    let (response_fut, _send) = send_request.send_request(request, true).unwrap();
+    let resp = response_fut.await.unwrap();
+    assert_eq!(resp.status().as_u16(), 200);
+    assert_eq!(
+        resp.headers().get("x-origin").map(|v| v.as_bytes()),
+        Some(&b"h1"[..])
+    );
+    let mut recv = resp.into_body();
+    let mut body = Vec::new();
+    while let Some(data) = std::future::poll_fn(|cx| recv.poll_data(cx)).await {
+        let chunk = data.unwrap();
+        let _ = recv.flow_control().release_capacity(chunk.len());
+        body.extend_from_slice(&chunk);
+    }
+    let text = String::from_utf8_lossy(&body).into_owned();
+    assert!(text.contains("\"origin\":\"h1\""), "{text}");
+
+    let mut deadline = 30;
+    loop {
+        if let Some(f) = latest_flow(&proxy).await {
+            if f.response.is_some() {
+                assert_eq!(
+                    f.request.unwrap().version,
+                    aether_core::model::HttpVersion::Http2,
+                    "client leg was h2"
+                );
+                return;
+            }
+        }
+        deadline -= 1;
+        assert!(deadline > 0, "flow never recorded");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn h1_client_leg_gets_h2_upstream() {
+    let origin = spawn_h2_origin("h2only.local").await;
+    let proxy = spawn_proxy(true).await;
+
+    let authority = format!("127.0.0.1:{}", origin.port());
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let mut tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"http/1.1"], true)).await;
+
+    // plain h1 request inside the tunnel (origin-form, MITM leg)
+    tls.write_all(
+        format!("GET /upgraded HTTP/1.1\r\nHost: {authority}\r\nconnection: close\r\n\r\n")
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut out = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(10), tls.read_to_end(&mut out))
+        .await
+        .unwrap();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.starts_with("HTTP/1.1 200"), "{text}");
+    assert!(text.contains("\"origin\":\"h2\""), "{text}");
+
+    // engine recorded the upstream leg as h2
+    let mut deadline = 30;
+    loop {
+        if let Some(f) = latest_flow(&proxy).await {
+            if let Some(res) = &f.response {
+                assert_eq!(
+                    res.version,
+                    aether_core::model::HttpVersion::Http2,
+                    "upstream leg was h2"
+                );
+                return;
+            }
+        }
+        deadline -= 1;
+        assert!(deadline > 0, "flow never recorded");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn websocket_upgrade_relays_and_records_session() {
+    let origin = spawn_wss_origin("ws.local").await;
+    let proxy = spawn_proxy(true).await;
+
+    let authority = format!("127.0.0.1:{}", origin.port());
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"http/1.1"], true)).await;
+
+    // tungstenite performs the RFC 6455 handshake over the (already TLS)
+    // tunnel — the proxy sees a normal wss upgrade on its MITM leg
+    let (mut ws, resp) = tokio_tungstenite::client_async(format!("ws://{authority}/socket"), tls)
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 101, "expected Switching Protocols");
+
+    // text round-trip
+    ws.send(Message::text("hello-from-client")).await.unwrap();
+    let echo = tokio::time::timeout(Duration::from_secs(5), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(echo, Message::text("hello-from-client"));
+
+    // binary round-trip
+    ws.send(Message::binary(vec![0xFFu8, 0x00, 0x42]))
+        .await
+        .unwrap();
+    let echo = tokio::time::timeout(Duration::from_secs(5), ws.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(echo, Message::binary(vec![0xFFu8, 0x00, 0x42]));
+
+    // close both directions; the relay ends and the session is persisted
+    ws.close(None).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
+
+    // find the 101 flow and wait for its session record
+    let mut deadline = 60;
+    loop {
+        let page = proxy
+            .storage
+            .list_flows(FlowQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut done = false;
+        for summary in &page.items {
+            if summary.status == Some(101) {
+                let flow = proxy.storage.get_flow(summary.id).await.unwrap().unwrap();
+                if let Some(session) = &flow.ws {
+                    assert!(flow.meta.tags.iter().any(|t| t == "websocket"));
+                    assert!(session.total_messages >= 4, "{:?}", session);
+                    let kinds: Vec<_> = session
+                        .messages
+                        .iter()
+                        .map(|m| (m.direction, m.kind))
+                        .collect();
+                    assert!(kinds.contains(&(
+                        aether_core::model::WsDirection::ToServer,
+                        aether_core::model::WsKind::Text
+                    )));
+                    assert!(kinds.contains(&(
+                        aether_core::model::WsDirection::ToClient,
+                        aether_core::model::WsKind::Text
+                    )));
+                    assert!(kinds.contains(&(
+                        aether_core::model::WsDirection::ToServer,
+                        aether_core::model::WsKind::Binary
+                    )));
+                    let hello = session
+                        .messages
+                        .iter()
+                        .find(|m| m.text.as_deref() == Some("hello-from-client"))
+                        .expect("recorded text preview");
+                    assert_eq!(hello.size, 17);
+                    done = true;
+                }
+            }
+        }
+        if done {
+            return;
+        }
+        deadline -= 1;
+        assert!(deadline > 0, "ws session never persisted");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn h2_connection_survives_multiple_streams() {
+    // two requests on ONE h2 client connection — proves the per-connection
+    // serve loop multiplexes instead of treating the tunnel as one shot
+    let origin = spawn_h2_origin("multi.local").await;
+    let proxy = spawn_proxy(true).await;
+
+    let authority = format!("127.0.0.1:{}", origin.port());
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"h2"], true)).await;
+
+    let (send_request, connection) = h2::client::handshake(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let mut send_request = send_request.ready().await.unwrap();
+
+    for path in ["/one", "/two"] {
+        let request = http::Request::builder()
+            .method("GET")
+            .uri(format!("https://{authority}{path}"))
+            .body(())
+            .unwrap();
+        let (response_fut, _send) = send_request.send_request(request, true).unwrap();
+        let resp = response_fut.await.unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let mut recv = resp.into_body();
+        let mut body = Vec::new();
+        while let Some(data) = std::future::poll_fn(|cx| recv.poll_data(cx)).await {
+            let chunk = data.unwrap();
+            let _ = recv.flow_control().release_capacity(chunk.len());
+            body.extend_from_slice(&chunk);
+        }
+        assert!(String::from_utf8_lossy(&body).contains(path), "{path}");
+    }
+
+    let mut deadline = 40;
+    loop {
+        let page = proxy
+            .storage
+            .list_flows(FlowQuery {
+                limit: 50,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        if page.items.len() >= 2 {
+            let paths: Vec<String> = page.items.iter().map(|s| s.path.clone()).collect();
+            assert!(paths.iter().any(|p| p == "/one"), "{paths:?}");
+            assert!(paths.iter().any(|p| p == "/two"), "{paths:?}");
+            return;
+        }
+        deadline -= 1;
+        assert!(deadline > 0, "both flows never recorded");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn connect_peek_serves_plaintext_upgrade() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        // a minimal plaintext WS echo origin (hand-rolled handshake)
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut stream = stream;
+                let mut buf = vec![0u8; 4096];
+                let n = stream.peek(&mut buf).await.unwrap_or(0);
+                let head = String::from_utf8_lossy(&buf[..n]).to_string();
+                if head.contains("Sec-WebSocket-Key:") {
+                    let key = head
+                        .lines()
+                        .find(|l| l.to_ascii_lowercase().starts_with("sec-websocket-key:"))
+                        .and_then(|l| l.split(':').nth(1))
+                        .unwrap_or("")
+                        .trim()
+                        .to_string();
+                    // fixed GUID concat without a SHA-1 impl: respond 101 with
+                    // a static accept — tungstenite-style clients verify it,
+                    // but here we only assert the proxy relayed the handshake
+                    let _ = key;
+                    let resp = String::from(
+                        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n",
+                    );
+                    let _ = stream.try_write(resp.as_bytes());
+                    // then echo raw frames byte-for-byte (server side)
+                    loop {
+                        match tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => {
+                                let _ = stream.try_write(&buf[..n]);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let proxy = spawn_proxy(true).await;
+    let authority = format!("127.0.0.1:{}", origin.port());
+
+    // CONNECT, then a plaintext upgrade inside the tunnel (Chrome-style)
+    let mut tunnel = connect_tunnel(proxy.addr, &authority).await;
+    tunnel
+        .write_all(format!("GET /ws HTTP/1.1\r\nHost: {authority}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    let mut resp = vec![0u8; 1024];
+    let n = tunnel.read(&mut resp).await.unwrap();
+    let text = String::from_utf8_lossy(&resp[..n]).into_owned();
+    assert!(
+        text.starts_with("HTTP/1.1 101"),
+        "proxy must relay the plaintext upgrade: {text}"
+    );
+
+    // the flow is recorded: 101 + websocket tag on the plaintext leg
+    let mut deadline = 30;
+    loop {
+        let page = proxy
+            .storage
+            .list_flows(FlowQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for summary in &page.items {
+            if summary.status == Some(101) {
+                let flow = proxy.storage.get_flow(summary.id).await.unwrap().unwrap();
+                assert!(flow.meta.tags.iter().any(|t| t == "websocket"));
+                assert_eq!(
+                    flow.meta.client_proto,
+                    aether_core::model::TransportProto::Plaintext
+                );
+                return;
+            }
+        }
+        deadline -= 1;
+        assert!(deadline > 0, "upgrade flow never recorded");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "aether-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aether-core",
  "aether-daemon",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "aether-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "aether-daemon"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aether-core",
  "aether-http",
@@ -61,11 +61,15 @@ dependencies = [
 
 [[package]]
 name = "aether-http"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aether-core",
  "async-trait",
  "base64",
+ "bytes",
+ "futures-util",
+ "h2",
+ "http",
  "rcgen",
  "rustls",
  "rustls-pemfile",
@@ -76,13 +80,14 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
  "tracing",
  "webpki-roots 0.26.11",
 ]
 
 [[package]]
 name = "aether-store-sqlite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aether-core",
  "async-trait",
@@ -216,6 +221,12 @@ checksum = "f28d99ec8bfea296261ca1af174f24225171fea9664ba9003cbebee704810528"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "atomic-waker"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "autocfg"
@@ -500,6 +511,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fnv"
+version = "1.0.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -615,6 +632,25 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
+]
+
+[[package]]
+name = "h2"
+version = "0.4.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d29020232d6aa3fb1daca64c1127cf662cf97f254ae16c18c05b8ab635fc118"
+dependencies = [
+ "atomic-waker",
+ "bytes",
+ "fnv",
+ "futures-core",
+ "futures-sink",
+ "http",
+ "indexmap",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -1735,6 +1771,20 @@ dependencies = [
  "log",
  "tokio",
  "tungstenite",
+]
+
+[[package]]
+name = "tokio-util"
+version = "0.7.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
+dependencies = [
+ "bytes",
+ "futures-core",
+ "futures-sink",
+ "libc",
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]

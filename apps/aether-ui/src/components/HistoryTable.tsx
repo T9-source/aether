@@ -278,7 +278,7 @@ export function HistoryTable(props: Props) {
                 <span className="chip status s-drop">DROP</span>
               ) : (
                 <span className={`chip status ${statusClass(r.status)}`}>
-                  {r.status ?? "…"}
+                  {r.status === 101 ? "WS" : (r.status ?? "…")}
                 </span>
               )}
             </span>

@@ -17,6 +17,7 @@ Architecture Decision Records. One decision, one file, permanent status.
 | [010](ADR-010-control-plane-protocol.md) | Control-plane protocol v1 (ops, auth, origin) | Accepted |
 | [011](ADR-011-body-capture-policy.md) | Body capture policy + upstream TLS knobs | Accepted |
 | [012](ADR-012-console-ui-and-replay.md) | Console UI stack, desktop shell, flows_replay, live rules | Accepted |
+| [013](ADR-013-h2-and-websocket.md) | HTTP/2 legs + WebSocket inspection (V0.2) | Accepted |
 
 ## Where each decision lives in code
 
@@ -27,6 +28,7 @@ Architecture Decision Records. One decision, one file, permanent status.
 - **ADR-005** → `crates/aether-core/src/storage.rs` (port) + `crates/aether-store-sqlite` (impl)
 - **ADR-006** → `crates/aether-core/src/{hooks,pipeline,rules}.rs`
 - **ADR-007** → explicit proxy only (`aether-http/src/server.rs`); h3 out of scope by design
+- **ADR-013** → `aether-http/src/{h2x,ws,server,upstream,tls}.rs` + `aether-core/src/model/ws.rs`
 - **ADR-008** → `LICENSE`, `NOTICE`, README licensing section
 - **ADR-009** → `crates/aether-http/src/{wire,upstream,server}.rs`
 - **ADR-011** → capture limits in `crates/aether-http/src/{wire,upstream,engine}.rs`

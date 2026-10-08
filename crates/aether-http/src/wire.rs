@@ -597,6 +597,86 @@ pub fn serialize_response(res: &Response, keep_alive: bool) -> Vec<u8> {
     out
 }
 
+/// Serializes an h1 **upgrade request** (RFC 6455) for the upstream leg.
+/// Identical to [`serialize_request`] except it never touches the
+/// `Connection`/`Upgrade` headers — the upgrade handshake IS the protocol,
+/// and `Connection: close` would abort it.
+pub fn serialize_request_upgrade(req: &Request) -> Vec<u8> {
+    let mut out = Vec::with_capacity(256 + req.body.len());
+    out.extend_from_slice(req.method.as_str().as_bytes());
+    out.push(b' ');
+    out.extend_from_slice(req.url.path_and_query().as_bytes());
+    out.extend_from_slice(b" HTTP/1.1\r\n");
+    for h in req.headers.iter() {
+        out.extend_from_slice(h.name.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(h.value.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    if !req.headers.contains("host") {
+        out.extend_from_slice(b"Host: ");
+        out.extend_from_slice(req.url.authority().as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"\r\n");
+    out.extend_from_slice(req.body.as_bytes());
+    out
+}
+
+/// Serializes a `101 Switching Protocols` response for the client leg:
+/// headers verbatim (they carry `Connection: Upgrade` + `Sec-WebSocket-*`),
+/// **no** injected `Content-Length`, **no** rewritten `Connection` — after
+/// these bytes the socket stops being HTTP and both sides speak WS frames.
+pub fn serialize_upgrade_response(res: &Response) -> Vec<u8> {
+    let mut out = Vec::with_capacity(160);
+    out.extend_from_slice(
+        format!(
+            "HTTP/1.1 {} {}\r\n",
+            res.status.code,
+            reason(res.status.code)
+        )
+        .as_bytes(),
+    );
+    for h in res.headers.iter() {
+        out.extend_from_slice(h.name.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(h.value.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"\r\n");
+    out
+}
+
+/// Serializes a response with **EOF (close-delimited) framing**: no
+/// `Content-Length` and `Connection: close`. Used when the upstream body
+/// exceeded the capture limit and the origin declared no length (chunked) —
+/// inventing a length would lie to the client; close-delimiting is the only
+/// honest h1 framing left (RFC 9110 §6.3).
+pub fn serialize_response_close_delimited(res: &Response) -> Vec<u8> {
+    let mut out = Vec::with_capacity(192 + res.body.len());
+    out.extend_from_slice(
+        format!(
+            "HTTP/1.1 {} {}\r\n",
+            res.status.code,
+            reason(res.status.code)
+        )
+        .as_bytes(),
+    );
+    for h in res.headers.iter() {
+        let name = h.name.to_ascii_lowercase();
+        if name == "content-length" || name == "transfer-encoding" {
+            continue; // framing is decided by the close, not by stale headers
+        }
+        out.extend_from_slice(h.name.as_bytes());
+        out.extend_from_slice(b": ");
+        out.extend_from_slice(h.value.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"Connection: close\r\n\r\n");
+    out.extend_from_slice(res.body.as_bytes());
+    out
+}
+
 /// A bare response with a JSON error body (used for 400/413/502 from the
 /// proxy itself).
 pub fn error_response(status: u16, message: &str) -> AetherResult<Response> {

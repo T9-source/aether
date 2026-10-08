@@ -34,6 +34,10 @@ import type { StatusCode as RawStatusCode } from "./StatusCode";
 import type { InterceptDirection as RawInterceptDirection } from "./InterceptDirection";
 import type { InterceptDecision as RawInterceptDecision } from "./InterceptDecision";
 import type { RuleStage as RawRuleStage } from "./RuleStage";
+import type { WsSession as RawWsSession } from "./WsSession";
+import type { WsMessage as RawWsMessage } from "./WsMessage";
+import type { WsKind as RawWsKind } from "./WsKind";
+import type { WsDirection as RawWsDirection } from "./WsDirection";
 
 export type AetherEvent = Normalize<RawAetherEvent>;
 export type Body = Normalize<RawBody>;
@@ -57,6 +61,10 @@ export type InterceptDirection = Normalize<RawInterceptDirection>;
 export type InterceptDecision = Normalize<RawInterceptDecision>;
 export type RuleStage = Normalize<RawRuleStage>;
 export type FlowStats = Normalize<RawFlowStats>;
+export type WsSession = Normalize<RawWsSession>;
+export type WsMessage = Normalize<RawWsMessage>;
+export type WsKind = RawWsKind;
+export type WsDirection = RawWsDirection;
 
 // ── Daemon-side DTOs (mirror crates/aether-daemon/src/control.rs — the
 // daemon crate does not export ts-rs bindings; keep in sync with protocol v1) ──

@@ -628,3 +628,10 @@ table.headers td.h-value { color: var(--text); word-break: break-all; }
 
 /* JSON syntax hinting (pretty bodies) */
 .code.json { color: #c9d4e3; }
+
+/* ── V0.2: HTTP/2 + WebSocket inspection ─────────────────────────────── */
+.meta-chip.h2 { color: var(--acc); border-color: rgba(90, 200, 250, 0.5); background: rgba(90, 200, 250, 0.08); font-weight: 600; }
+.ws-dir { font-weight: 600; white-space: nowrap; width: 56px; }
+.ws-dir.to_server { color: #f5a97f; }
+.ws-dir.to_client { color: #8bd5ca; }
+.ws-preview { white-space: pre-wrap; word-break: break-word; max-width: 520px; }

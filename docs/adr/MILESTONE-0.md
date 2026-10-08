@@ -1,6 +1,6 @@
 # Milestone 0 — Acceptance Criteria: "The Birth of Aether"
 
-- **Status:** Phase 2 shipped — criteria verified where V0.1/V0.2 scope applies (see per-criterion status)
+- **Status:** Phase 3 shipped (V0 dogfoodable + V0.2 h2/WebSocket) — 10/12 criteria fully verified; the remaining two are founder-machine runtime rituals (desktop CA install; full 24h soak run)
 - **Date:** 2026-10-08 (criteria), 2026-10-08 (status update)
 - **Author:** smart-jemy
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ControlClient } from "../lib/ws";
-import type { Body, Flow } from "../types";
+import type { Body, Flow, WsSession } from "../types";
 import { bodyAsText, bodyBytes, methodToString, requestToCurl, requestToRaw, responseToRaw, toHexDump } from "../lib/httpText";
 import { fmtBytes, fmtMs, methodClass, pathWithQuery, statusClass } from "../lib/format";
 
@@ -34,7 +34,7 @@ function contentType(b: Body, headers: { name: string; value: string }[]): strin
 export function FlowViewer(props: Props) {
   const [flow, setFlow] = useState<Flow | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"request" | "response">("request");
+  const [tab, setTab] = useState<"request" | "response" | "ws">("request");
   const [reqMode, setReqMode] = useState<BodyMode>("pretty");
   const [resMode, setResMode] = useState<BodyMode>("pretty");
   const [rawWhole, setRawWhole] = useState(false);
@@ -52,7 +52,7 @@ export function FlowViewer(props: Props) {
       .then((f) => {
         if (!alive) return;
         setFlow(f);
-        setTab(f.response !== null ? "response" : "request");
+        setTab(f.ws !== null ? "ws" : f.response !== null ? "response" : "request");
       })
       .catch((e) => alive && setError(String(e.message ?? e)));
     return () => {
@@ -114,6 +114,7 @@ export function FlowViewer(props: Props) {
 
       <div className="viewer-meta">
         <span className="meta-chip">#{flow.id}</span>
+        {req?.version === "http2" && <span className="meta-chip h2">HTTP/2</span>}
         <span className="meta-chip">{meta.client_proto.toUpperCase()} → {meta.server_proto.toUpperCase()}</span>
         {meta.duration_ms !== null && <span className="meta-chip">{fmtMs(meta.duration_ms)}</span>}
         {req !== null && <span className="meta-chip">req {fmtBytes(req.body.kind === "empty" ? 0 : req.body.kind === "text" ? req.body.text.length : req.body.bytes.length)}</span>}
@@ -140,12 +141,23 @@ export function FlowViewer(props: Props) {
         >
           Response {res === null ? "(none)" : ""}
         </button>
+        {flow.ws !== null && (
+          <button className={`tab ${tab === "ws" ? "active" : ""}`} onClick={() => setTab("ws")}>
+            WebSocket ({flow.ws.total_messages})
+          </button>
+        )}
         <span className="spacer" />
-        <label className="raw-toggle">
-          <input type="checkbox" checked={rawWhole} onChange={(e) => setRawWhole(e.target.checked)} />
-          raw HTTP message
-        </label>
+        {tab !== "ws" && (
+          <label className="raw-toggle">
+            <input type="checkbox" checked={rawWhole} onChange={(e) => setRawWhole(e.target.checked)} />
+            raw HTTP message
+          </label>
+        )}
       </div>
+
+      {tab === "ws" && flow.ws !== null && (
+        <WsSessionPane session={flow.ws} onCopy={copy} copied={copied} />
+      )}
 
       {tab === "request" && req !== null && (
         <MessagePane
@@ -258,6 +270,74 @@ function MessagePane<M extends { headers: { entries: { name: string; value: stri
               : text}
           </pre>
         </>
+      )}
+    </div>
+  );
+}
+
+/** One recorded WebSocket session (V0.2): direction, kind, size, preview. */
+function WsSessionPane({
+  session,
+  onCopy,
+  copied,
+}: {
+  session: WsSession;
+  onCopy: (what: string, text: string) => void;
+  copied: string | null;
+}) {
+  const dump = useMemo(() => {
+    return session.messages
+      .map((m) => {
+        const dir = m.direction === "to_server" ? "→ server" : "← server";
+        const payload =
+          m.text !== null
+            ? m.text
+            : m.base64 !== null
+              ? `base64(${m.base64.length}B): ${m.base64}`
+              : "";
+        return `${dir}  ${m.kind}  ${m.size}B${m.truncated ? " (preview truncated)" : ""}\n  ${payload}`;
+      })
+      .join("\n\n");
+  }, [session]);
+
+  return (
+    <div className="pane">
+      <div className="pane-toolbar">
+        <span className="dim">
+          {session.messages.length} recorded of {session.total_messages} messages ·{" "}
+          {fmtBytes(session.total_bytes)} total
+          {session.truncated ? " · truncated" : ""}
+          {session.closed_at_unix_ms === null ? " · live" : ""}
+        </span>
+        <button className="btn ghost" onClick={() => onCopy("ws-dump", dump)}>
+          {copied === "ws-dump" ? "copied ✓" : "copy session"}
+        </button>
+      </div>
+      <table className="headers">
+        <tbody>
+          {session.messages.map((m, i) => (
+            <tr key={i}>
+              <td className={`ws-dir mono ${m.direction}`}>
+                {m.direction === "to_server" ? "↑ out" : "↓ in"}
+              </td>
+              <td className="mono">{m.kind}</td>
+              <td className="mono dim">{fmtBytes(m.size)}</td>
+              <td className="h-value mono ws-preview">
+                {m.text !== null
+                  ? m.text
+                  : m.base64 !== null
+                    ? `base64: ${m.base64}`
+                    : ""}
+                {m.truncated ? " …" : ""}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {session.messages.length === 0 && (
+        <div className="dim body-empty">
+          no messages were recorded (connection closed before any frame crossed)
+        </div>
       )}
     </div>
   );

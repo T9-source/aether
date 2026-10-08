@@ -47,6 +47,7 @@ async fn spawn_daemon() -> TestDaemon {
         passthrough: vec![],
         host_overrides: Default::default(),
         upstream_tls_verify: false,
+        upstream_alpn_h2: true,
         capture_max_body: 8 * 1024 * 1024,
     };
     cfg.proxy.listen = "127.0.0.1:0".into();

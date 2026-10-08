@@ -9,13 +9,13 @@
 //!   request with `Connection: close` (V0.1, ADR-009).
 
 use aether_core::error::{AetherError, AetherResult};
-use aether_core::model::{HttpVersion, Method, Request, TransportProto};
+use aether_core::model::{HttpVersion, Method, Request, TransportProto, WsDirection};
 use aether_core::{AetherEvent, Scope};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
@@ -23,6 +23,7 @@ use crate::ca::CaManager;
 use crate::engine::{ConnInfo, FlowEngine};
 use crate::tls::{self, TlsFacts};
 use crate::wire;
+use crate::ws::WsRecorder;
 
 /// Type-erased bidirectional stream — the recursion boundary for the
 /// CONNECT → MITM → serve loop. Without erasure the compiler must prove
@@ -171,6 +172,14 @@ impl ProxyServer {
                 return self.handle_connect(request, reader, peer).await;
             }
 
+            // WebSocket upgrade (RFC 6455, V0.2 ADR-013): detected on the
+            // wire, run through the same engine, then relayed as frames.
+            if request.method == Method::Get && is_websocket_upgrade(&request.headers) {
+                return self
+                    .handle_websocket(request, reader, peer, scheme, tls_facts.clone())
+                    .await;
+            }
+
             // ── request body (bounded) ───────────────────────────────────
             let spec = match wire::request_body_spec(&request.headers) {
                 Ok(s) => s,
@@ -229,7 +238,15 @@ impl ProxyServer {
                     response,
                     remainder,
                 } => {
-                    let bytes = wire::serialize_response(&response, keep_alive);
+                    let bytes = match &remainder {
+                        // chunked origins beyond the capture cap declare no
+                        // length — the only honest h1 framing left is EOF
+                        // (RFC 9110 §6.3); inventing a CL would lie
+                        Some(_) if !response.headers.contains("content-length") => {
+                            wire::serialize_response_close_delimited(&response)
+                        }
+                        _ => wire::serialize_response(&response, keep_alive),
+                    };
                     if reader.get_mut().write_all(&bytes).await.is_err() {
                         return Ok(());
                     }
@@ -299,25 +316,75 @@ impl ProxyServer {
             .await
             .map_err(|e| AetherError::network(format!("client gone during CONNECT: {e}")))?;
 
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_cfg));
-        let tls_stream: tokio_rustls::server::TlsStream<Box<dyn AsyncReadWrite>> =
-            acceptor.accept(raw).await.map_err(|e| {
-                AetherError::tls(format!("MITM handshake with client failed for {host}: {e}"))
-            })?;
-        let facts = tls_facts_of(&tls_stream);
-        tracing::debug!(%host, "MITM tunnel established");
-        self.serve_h1(
-            Box::new(tls_stream),
-            "https",
-            Some(authority),
-            Some(facts),
-            peer,
-        )
-        .await
+        // ── peek the first bytes of the tunnel (wire truth over guesswork):
+        // TLS ClientHello (0x16 0x03 …) → MITM as usual. Anything else is a
+        // PLAINTEXT h1 exchange inside the tunnel — real clients do this for
+        // `ws://` (CONNECT, then an unencrypted RFC 6455 upgrade). Serving
+        // plaintext here keeps WebSockets on http origins working instead of
+        // dying with a TLS handshake error.
+        let mut peeked = vec![0u8; 3];
+        let n = tokio::time::timeout(self.cfg.idle_timeout, raw.read(&mut peeked))
+            .await
+            .map_err(|_| AetherError::network("tunnel peek timeout"))?
+            .map_err(|e| AetherError::network(format!("tunnel read: {e}")))?;
+        peeked.truncate(n);
+        if n == 0 {
+            return Ok(()); // client went away mid-tunnel
+        }
+        let is_tls = peeked[0] == 0x16 && peeked[1] == 0x03;
+
+        if is_tls {
+            let client = PrefixStream {
+                prefix: peeked,
+                pos: 0,
+                inner: raw,
+            };
+            let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_cfg));
+            let tls_stream: tokio_rustls::server::TlsStream<PrefixStream> =
+                acceptor.accept(client).await.map_err(|e| {
+                    AetherError::tls(format!("MITM handshake with client failed for {host}: {e}"))
+                })?;
+            let facts = tls_facts_of(&tls_stream);
+            let negotiated_h2 = tls_stream.get_ref().1.alpn_protocol() == Some(b"h2");
+            if negotiated_h2 {
+                // V0.2 (ADR-013): the client speaks HTTP/2 — serve streams
+                // through the h2 leg codec; same engine, same history.
+                tracing::debug!(%host, "MITM tunnel established (h2 via ALPN)");
+                crate::h2x::serve_connection(
+                    self.engine.clone(),
+                    Box::new(tls_stream),
+                    peer,
+                    Some(facts),
+                )
+                .await;
+                return Ok(());
+            }
+            tracing::debug!(%host, "MITM tunnel established (h1)");
+            self.serve_h1(
+                Box::new(tls_stream),
+                "https",
+                Some(authority),
+                Some(facts),
+                peer,
+            )
+            .await
+        } else {
+            // plaintext h1 inside the CONNECT tunnel (ws:// over proxies)
+            tracing::debug!(%host, "tunnel established (plaintext h1 inside CONNECT)");
+            let client = PrefixStream {
+                prefix: peeked,
+                pos: 0,
+                inner: raw,
+            };
+            self.serve_h1(Box::new(client), "http", Some(authority), None, peer)
+                .await
+        }
     }
 }
 
-fn tls_facts_of(stream: &tokio_rustls::server::TlsStream<Box<dyn AsyncReadWrite>>) -> TlsFacts {
+fn tls_facts_of<IO: AsyncRead + AsyncWrite + Unpin>(
+    stream: &tokio_rustls::server::TlsStream<IO>,
+) -> TlsFacts {
     let (_, conn) = stream.get_ref();
     TlsFacts {
         version: conn.protocol_version().map(|v| format!("{v:?}")),
@@ -327,6 +394,201 @@ fn tls_facts_of(stream: &tokio_rustls::server::TlsStream<Box<dyn AsyncReadWrite>
         alpn: conn
             .alpn_protocol()
             .map(|p| String::from_utf8_lossy(p).into_owned()),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket relay (V0.2, ADR-013)
+// ---------------------------------------------------------------------------
+
+/// RFC 6455 §4.2.1 upgrade markers (case-insensitive per RFC 9110 §7.6).
+fn is_websocket_upgrade(headers: &aether_core::model::Headers) -> bool {
+    let upgrade = headers
+        .get("upgrade")
+        .map(|v| v.to_ascii_lowercase().contains("websocket"))
+        .unwrap_or(false);
+    let connection = headers
+        .get("connection")
+        .map(|v| v.to_ascii_lowercase().contains("upgrade"))
+        .unwrap_or(false);
+    upgrade && connection
+}
+
+/// Client-leg socket with bytes already buffered by the h1 head reader —
+/// the first WS frames often arrive with the handshake, and losing them
+/// would corrupt the stream.
+struct PrefixStream {
+    prefix: Vec<u8>,
+    pos: usize,
+    inner: Box<dyn AsyncReadWrite>,
+}
+
+impl AsyncRead for PrefixStream {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.pos < this.prefix.len() {
+            let n = buf.remaining().min(this.prefix.len() - this.pos);
+            buf.put_slice(&this.prefix[this.pos..this.pos + n]);
+            this.pos += n;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        std::pin::Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for PrefixStream {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+/// Re-erased so the MITM accept result boxes back into the recursion
+/// boundary (`serve_h1`/`h2x::serve_connection` take `Box<dyn AsyncReadWrite>`).
+impl AsyncReadWrite for PrefixStream {}
+
+impl ProxyServer {
+    /// The full WebSocket lifecycle: upgrade through the engine, serve the
+    /// 101, then relay frames byte-for-byte while the recorder assembles
+    /// the bounded session (persisted on the flow when the socket ends).
+    async fn handle_websocket(
+        &self,
+        request: Request,
+        mut reader: BufReader<Box<dyn AsyncReadWrite>>,
+        peer: SocketAddr,
+        scheme: &'static str,
+        tls_facts: Option<TlsFacts>,
+    ) -> AetherResult<()> {
+        let conn_info = ConnInfo {
+            client_addr: peer,
+            client_proto: if scheme == "https" {
+                TransportProto::Tls
+            } else {
+                TransportProto::Plaintext
+            },
+            tls: tls_facts,
+        };
+
+        match self.engine.handle_upgrade(request, conn_info).await {
+            crate::engine::UpgradeOutcome::Upgraded {
+                flow_id,
+                response,
+                upstream,
+            } => {
+                let bytes = wire::serialize_upgrade_response(&response);
+                if reader.get_mut().write_all(&bytes).await.is_err() {
+                    return Ok(());
+                }
+                self.engine.bus.publish(AetherEvent::WsOpened { flow_id });
+
+                // reclaim anything the head reader already swallowed
+                let prefix = reader.buffer().to_vec();
+                let raw = reader.into_inner();
+                let client = PrefixStream {
+                    prefix,
+                    pos: 0,
+                    inner: raw,
+                };
+
+                let recorder = WsRecorder::new(flow_id, self.engine.bus.clone());
+                let rec_a = recorder.clone();
+                let rec_b = recorder.clone();
+                let (client_r, client_w) = tokio::io::split(client);
+                let (up_r, up_w) = tokio::io::split(upstream);
+                let mut c2s = tokio::spawn(async move {
+                    crate::ws::relay_leg(client_r, up_w, WsDirection::ToServer, &rec_a).await
+                });
+                let mut s2c = tokio::spawn(async move {
+                    crate::ws::relay_leg(up_r, client_w, WsDirection::ToClient, &rec_b).await
+                });
+
+                // First leg to end wins: abort the sibling — both socket
+                // halves drop, the peers see FIN, the session is over.
+                tokio::select! {
+                    r = &mut c2s => {
+                        if let Err(e) = r {
+                            tracing::debug!(%flow_id, error = %e, "ws c2s leg ended");
+                        }
+                        s2c.abort();
+                    }
+                    r = &mut s2c => {
+                        if let Err(e) = r {
+                            tracing::debug!(%flow_id, error = %e, "ws s2c leg ended");
+                        }
+                        c2s.abort();
+                    }
+                }
+
+                // persist the bounded session on the flow (primitive #5)
+                let session = recorder.finish();
+                let (total_messages, total_bytes) = (session.total_messages, session.total_bytes);
+                match self.engine.storage.get_flow(flow_id).await {
+                    Ok(Some(mut flow)) => {
+                        flow.ws = Some(session);
+                        if let Err(e) = self.engine.storage.put_flow(&flow).await {
+                            tracing::warn!(%flow_id, error = %e, "ws session persist failed");
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!(%flow_id, error = %e, "ws flow reload failed"),
+                }
+                self.engine.bus.publish(AetherEvent::WsClosed {
+                    flow_id,
+                    total_messages,
+                    total_bytes,
+                });
+                tracing::debug!(%flow_id, total_messages, total_bytes, "ws relay closed");
+                Ok(())
+            }
+            crate::engine::UpgradeOutcome::Replied {
+                response,
+                remainder,
+            } => {
+                // the origin refused the upgrade — a normal response
+                let bytes = match &remainder {
+                    Some(_) if !response.headers.contains("content-length") => {
+                        wire::serialize_response_close_delimited(&response)
+                    }
+                    _ => wire::serialize_response(&response, false),
+                };
+                reader.get_mut().write_all(&bytes).await.ok();
+                if let Some(mut rem) = remainder {
+                    let mut sink = reader.get_mut();
+                    let _ = tokio::io::copy(&mut rem, &mut sink).await;
+                }
+                Ok(())
+            }
+            crate::engine::UpgradeOutcome::Dropped { reason } => {
+                let res = wire::error_response(502, &format!("exchange dropped: {reason}"))?;
+                reader
+                    .get_mut()
+                    .write_all(&wire::serialize_response(&res, false))
+                    .await
+                    .ok();
+                Ok(())
+            }
+        }
     }
 }
 

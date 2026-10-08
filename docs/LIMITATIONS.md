@@ -9,7 +9,7 @@
 | Limit | Why | When it lifts |
 |---|---|---|
 | HTTP/1.1 and HTTP/2 only; no HTTP/3 upstream leg | ADR-007: QUIC/ECH interception is a research project, not an MVP feature. Browsers silently fall back to TCP when a proxy is configured (h3 is not proxied over CONNECT), so nothing breaks | Explicit, non-goal until the ecosystem demand is proven |
-| WebSocket inspection covers h1 upgrades only | RFC 6455 upgrade is an h1 mechanism. WS-over-h2 (RFC 8441 `CONNECT + :protocol`) is not intercepted — Chrome uses it only for its own gRPC WebTransport-ish traffic, rarely for app sockets | Backlog (V0.3+) |
+| WebSocket inspection covers h1 upgrades only | RFC 6455 upgrade is an h1 mechanism — over CONNECT tunnels too (the tunnel is peeked: plaintext upgrades are served inside, ADR-013 #3). WS-over-h2 (RFC 8441 `CONNECT + :protocol`) is not intercepted — Chrome uses it only for its own internal channels | Backlog (V0.3+) |
 | h2 header **order** is best-effort | The h2 leg uses the `h2` crate (ADR-013); `http::HeaderMap` does not guarantee original ordering. Duplicate headers and values are preserved exactly; ordering is not | If a real-world case needs exact h2 header order, the HPACK layer becomes hand-rolled (tracked, expensive) |
 | No h2 trailers (either direction) | Trailers are rare in practice; forwarding them through the intercept model adds a third body phase to every primitive | Backlog |
 | h2c (cleartext h2) not supported on the client leg | Browsers never speak h2c to a proxy; prior-knowledge h2c clients are rare | Backlog |

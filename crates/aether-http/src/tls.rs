@@ -37,18 +37,33 @@ impl ResolvesServerCert for FixedResolver {
 
 /// Server config for one MITM'd CONNECT tunnel (cheap to build per tunnel:
 /// no key generation happens here — the leaf is pre-built and cached).
+/// ALPN offers both h2 and h1 (V0.2, ADR-013): the client picks, the
+/// dispatch after the handshake routes to the matching leg codec.
 pub fn mitm_server_config(leaf: Arc<CertifiedKey>) -> AetherResult<ServerConfig> {
     let mut cfg = ServerConfig::builder_with_provider(crypto_provider())
         .with_safe_default_protocol_versions()
         .map_err(|e| aether_core::AetherError::tls(format!("server builder: {e}")))?
         .with_no_client_auth()
         .with_cert_resolver(Arc::new(FixedResolver(leaf)));
-    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    cfg.alpn_protocols = alpn_to_vec(ALPN_H2_H1);
     Ok(cfg)
 }
 
-/// Upstream client config. `verify=false` installs `NoVerify` (lab mode).
-pub fn upstream_client_config(verify: bool) -> AetherResult<ClientConfig> {
+/// ALPN lists (V0.2): the client leg offers h2 first, h1 second.
+pub const ALPN_H2_H1: &[&[u8]] = &[b"h2", b"http/1.1"];
+pub const ALPN_H1: &[&[u8]] = &[b"http/1.1"];
+
+fn alpn_to_vec(alpn: &[&[u8]]) -> Vec<Vec<u8>> {
+    alpn.iter().map(|p| p.to_vec()).collect()
+}
+
+/// Upstream client config with an explicit ALPN list. h1-only is used for
+/// WebSocket upgrades (h2 has no upgrade mechanism on this path); h2+h1 is
+/// used for normal exchanges when `upstream_alpn_h2` is enabled (ADR-013).
+pub fn upstream_client_config_with_alpn(
+    verify: bool,
+    alpn: &[&[u8]],
+) -> AetherResult<ClientConfig> {
     let versions = ClientConfig::builder_with_provider(crypto_provider())
         .with_safe_default_protocol_versions()
         .map_err(|e| aether_core::AetherError::tls(format!("client builder: {e}")))?;
@@ -65,8 +80,14 @@ pub fn upstream_client_config(verify: bool) -> AetherResult<ClientConfig> {
             .with_custom_certificate_verifier(Arc::new(NoVerify))
             .with_no_client_auth()
     };
-    cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    cfg.alpn_protocols = alpn_to_vec(alpn);
     Ok(cfg)
+}
+
+/// Upstream client config (h1 ALPN only — the pre-V0.2 behavior, kept for
+/// WebSocket upgrades and for `upstream_alpn_h2 = false`).
+pub fn upstream_client_config(verify: bool) -> AetherResult<ClientConfig> {
+    upstream_client_config_with_alpn(verify, ALPN_H1)
 }
 
 /// Accept-everything verifier for `verify=false` and integration tests.
