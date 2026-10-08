@@ -2,5 +2,11 @@
 import type { FlowMeta } from "./FlowMeta";
 import type { Request } from "./Request";
 import type { Response } from "./Response";
+import type { WsSession } from "./WsSession";
 
-export type Flow = { id: bigint, request: Request | null, response: Response | null, meta: FlowMeta, };
+export type Flow = { id: bigint, request: Request | null, response: Response | null, meta: FlowMeta, 
+/**
+ * WebSocket session record when this flow upgraded to a WS connection
+ * (V0.2, ADR-013). `Some` only after the relay observed messages.
+ */
+ws: WsSession | null, };

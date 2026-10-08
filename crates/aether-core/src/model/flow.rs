@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::model::{Request, Response};
+use crate::model::{Request, Response, WsSession};
 
 pub type FlowId = u64;
 
@@ -72,6 +72,10 @@ pub struct Flow {
     pub request: Option<Request>,
     pub response: Option<Response>,
     pub meta: FlowMeta,
+    /// WebSocket session record when this flow upgraded to a WS connection
+    /// (V0.2, ADR-013). `Some` only after the relay observed messages.
+    #[serde(default)]
+    pub ws: Option<WsSession>,
 }
 
 impl Flow {
@@ -81,6 +85,7 @@ impl Flow {
             request: Some(request),
             response: None,
             meta: FlowMeta::now(),
+            ws: None,
         }
     }
 

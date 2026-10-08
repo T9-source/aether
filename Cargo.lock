@@ -8,14 +8,18 @@ version = "0.1.0"
 dependencies = [
  "aether-core",
  "aether-daemon",
+ "aether-http",
  "aether-store-sqlite",
  "async-trait",
  "clap",
  "dirs",
  "futures-util",
+ "rcgen",
+ "rustls",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite",
  "tracing-subscriber",
 ]

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use ts_rs::TS;
 
-use crate::model::FlowId;
+use crate::model::{FlowId, WsDirection, WsKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -103,6 +103,24 @@ pub enum AetherEvent {
     ErrorOccurred {
         context: String,
         message: String,
+    },
+    // ── V0.2 (WebSocket inspection, ADR-013) ────────────────────────────
+    /// An h1 exchange upgraded to a WebSocket connection; the relay is live.
+    WsOpened {
+        flow_id: FlowId,
+    },
+    /// One assembled message crossed the relay (recorded or counted-only).
+    WsMessage {
+        flow_id: FlowId,
+        direction: WsDirection,
+        kind: WsKind,
+        size: u64,
+    },
+    /// The WebSocket relay ended; the bounded session record was persisted.
+    WsClosed {
+        flow_id: FlowId,
+        total_messages: u64,
+        total_bytes: u64,
     },
 }
 

@@ -64,10 +64,22 @@ enum Commands {
         #[command(subcommand)]
         command: RulesCommand,
     },
-    /// Local benchmarks against the storage backend.
+    /// Local benchmarks against the storage backend and the proxy paths.
     Bench {
         #[command(subcommand)]
         command: BenchCommand,
+    },
+    /// Steady-state health probe: continuous traffic + RSS/FD sampling.
+    Soak {
+        /// Duration in seconds (the M0 acceptance run is 86400 = 24h).
+        #[arg(long, default_value_t = 120)]
+        secs: u64,
+        /// Concurrent traffic workers.
+        #[arg(long, default_value_t = 4)]
+        workers: u32,
+        /// Persist flows to this SQLite file instead of a tempdir.
+        #[arg(long)]
+        db: Option<PathBuf>,
     },
     /// Run the Phase-0 architectural proof through the real pipeline.
     Demo,
@@ -260,6 +272,11 @@ enum BenchCommand {
         #[arg(long)]
         keep: bool,
     },
+    /// Measure added latency: direct vs plain-proxy vs MITM (criterion 11).
+    Proxy {
+        #[arg(long, default_value_t = 300)]
+        requests: u32,
+    },
 }
 
 #[tokio::main]
@@ -369,7 +386,9 @@ async fn main() {
         },
         Commands::Bench { command } => match command {
             BenchCommand::Flows { n, db, keep } => commands::bench::flows(n, db, keep).await,
+            BenchCommand::Proxy { requests } => commands::bench::proxy(requests).await,
         },
+        Commands::Soak { secs, workers, db } => commands::soak::run(secs, workers, db).await,
         Commands::Demo => commands::demo::run().await,
         Commands::Info => commands::demo::info(),
         Commands::About => commands::demo::about(),

@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 aether-core = { path = "../../crates/aether-core" }
 aether-daemon = { path = "../../crates/aether-daemon" }
+aether-http = { path = "../../crates/aether-http" }
 aether-store-sqlite = { path = "../../crates/aether-store-sqlite" }
 clap = { workspace = true }
 tokio = { workspace = true }
@@ -24,7 +25,10 @@ tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 tracing-subscriber = { workspace = true }
 dirs = { workspace = true }
-
 tempfile = { workspace = true }
+# lab (bench proxy / soak): real TLS legs against local origins
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+rcgen = { workspace = true }
 
 [dev-dependencies]

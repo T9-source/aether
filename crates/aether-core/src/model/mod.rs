@@ -12,6 +12,7 @@ pub mod headers;
 pub mod request;
 pub mod response;
 pub mod url;
+pub mod ws;
 
 pub use body::Body;
 pub use flow::{Flow, FlowId, FlowMeta, TlsMeta, TransportProto, unix_millis_now};
@@ -19,3 +20,4 @@ pub use headers::{Header, Headers};
 pub use request::{HttpVersion, Method, Request};
 pub use response::{Response, StatusCode};
 pub use url::Url;
+pub use ws::{WsDirection, WsKind, WsMessage, WsSession};

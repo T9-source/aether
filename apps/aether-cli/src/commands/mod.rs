@@ -6,8 +6,10 @@ pub mod ca;
 pub mod demo;
 pub mod flows;
 pub mod intercept;
+pub(crate) mod lab;
 pub mod rules;
 pub mod serve;
+pub mod soak;
 
 use crate::client::ControlClient;
 use aether_core::error::AetherResult;

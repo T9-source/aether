@@ -26,7 +26,7 @@ pub struct SqliteStore {
 
 const FLOW_COLUMNS: &str = "id, created_at, completed, dropped, method, scheme, host, port, \
      path, query, status, request_bytes, response_bytes, duration_ms, \
-     client_proto, server_proto, tags_json, request_json, response_json, tls_json";
+     client_proto, server_proto, tags_json, request_json, response_json, tls_json, ws_json";
 
 impl SqliteStore {
     /// Opens (creating if needed) a store at `path`. `:memory:` uses a
@@ -96,7 +96,8 @@ impl SqliteStore {
                 tags_json       TEXT NOT NULL DEFAULT '[]',
                 request_json    TEXT,
                 response_json   TEXT,
-                tls_json        TEXT
+                tls_json        TEXT,
+                ws_json         TEXT
             )"#,
         )
         .execute(&self.pool)
@@ -110,6 +111,21 @@ impl SqliteStore {
             .execute(&self.pool)
             .await
             .map_err(db)?;
+        // V0.2 (ADR-013): WebSocket session records — add the column when the
+        // database predates it (CREATE TABLE IF NOT EXISTS won't upgrade).
+        let has_ws: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('flows') WHERE name = 'ws_json'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        if has_ws == 0 {
+            sqlx::query("ALTER TABLE flows ADD COLUMN ws_json TEXT")
+                .execute(&self.pool)
+                .await
+                .map_err(db)?;
+            tracing::info!("migrated flows table: added ws_json (V0.2)");
+        }
         Ok(())
     }
 
@@ -210,6 +226,12 @@ fn flow_to_row(flow: &Flow) -> AetherResult<RowValues> {
             .map(serde_json::to_string)
             .transpose()
             .map_err(serde_err)?,
+        ws_json: flow
+            .ws
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(serde_err)?,
     })
 }
 
@@ -235,6 +257,7 @@ struct RowValues {
     request_json: Option<String>,
     response_json: Option<String>,
     tls_json: Option<String>,
+    ws_json: Option<String>,
 }
 
 fn row_to_summary(row: &SqliteRow) -> AetherResult<FlowSummary> {
@@ -288,6 +311,12 @@ fn row_to_flow(row: &SqliteRow) -> AetherResult<Flow> {
         .map(serde_json::from_str)
         .transpose()
         .map_err(serde_err)?;
+    let ws: Option<aether_core::model::WsSession> = row
+        .try_get::<Option<&str>, _>("ws_json")
+        .map_err(db)?
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(serde_err)?;
     let client_proto: aether_core::model::TransportProto =
         serde_json::from_str(row.try_get::<&str, _>("client_proto").map_err(db)?)
             .map_err(serde_err)?;
@@ -299,6 +328,7 @@ fn row_to_flow(row: &SqliteRow) -> AetherResult<Flow> {
         id: row.try_get::<i64, _>("id").map_err(db)? as u64,
         request,
         response,
+        ws,
         meta: aether_core::model::FlowMeta {
             created_at_unix_ms: row.try_get::<i64, _>("created_at").map_err(db)? as u64,
             duration_ms: row
@@ -325,8 +355,8 @@ impl Storage for SqliteStore {
             r#"INSERT INTO flows
                (id, created_at, completed, dropped, method, scheme, host, port, path, query,
                 status, request_bytes, response_bytes, duration_ms, client_proto, server_proto,
-                tags_json, request_json, response_json, tls_json)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+                tags_json, request_json, response_json, tls_json, ws_json)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
                ON CONFLICT(id) DO UPDATE SET
                  created_at=excluded.created_at, completed=excluded.completed,
                  dropped=excluded.dropped, method=excluded.method, scheme=excluded.scheme,
@@ -335,7 +365,8 @@ impl Storage for SqliteStore {
                  response_bytes=excluded.response_bytes, duration_ms=excluded.duration_ms,
                  client_proto=excluded.client_proto, server_proto=excluded.server_proto,
                  tags_json=excluded.tags_json, request_json=excluded.request_json,
-                 response_json=excluded.response_json, tls_json=excluded.tls_json"#,
+                 response_json=excluded.response_json, tls_json=excluded.tls_json,
+                 ws_json=excluded.ws_json"#,
         )
         .bind(v.id)
         .bind(v.created_at)
@@ -357,6 +388,7 @@ impl Storage for SqliteStore {
         .bind(&v.request_json)
         .bind(&v.response_json)
         .bind(&v.tls_json)
+        .bind(&v.ws_json)
         .execute(&self.pool)
         .await
         .map_err(db)?;
@@ -378,8 +410,8 @@ impl Storage for SqliteStore {
                 r#"INSERT INTO flows
                    (id, created_at, completed, dropped, method, scheme, host, port, path, query,
                     status, request_bytes, response_bytes, duration_ms, client_proto, server_proto,
-                    tags_json, request_json, response_json, tls_json)
-                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+                    tags_json, request_json, response_json, tls_json, ws_json)
+                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
                    ON CONFLICT(id) DO UPDATE SET
                      created_at=excluded.created_at, completed=excluded.completed,
                      dropped=excluded.dropped, method=excluded.method, scheme=excluded.scheme,
@@ -388,7 +420,8 @@ impl Storage for SqliteStore {
                      response_bytes=excluded.response_bytes, duration_ms=excluded.duration_ms,
                      client_proto=excluded.client_proto, server_proto=excluded.server_proto,
                      tags_json=excluded.tags_json, request_json=excluded.request_json,
-                     response_json=excluded.response_json, tls_json=excluded.tls_json"#,
+                     response_json=excluded.response_json, tls_json=excluded.tls_json,
+                     ws_json=excluded.ws_json"#,
             )
             .bind(v.id)
             .bind(v.created_at)
@@ -410,6 +443,7 @@ impl Storage for SqliteStore {
             .bind(&v.request_json)
             .bind(&v.response_json)
             .bind(&v.tls_json)
+            .bind(&v.ws_json)
             .execute(&mut *tx)
             .await
             .map_err(db)?;

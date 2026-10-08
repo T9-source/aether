@@ -12,6 +12,116 @@ use aether_store_sqlite::SqliteStore;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use super::lab::{self, LabOrigin, LabProxy, Path};
+
+// ---------------------------------------------------------------------------
+// `aether bench proxy` — the Milestone-0 latency gate (criterion 11).
+//
+// Measures *added* latency of every proxy path against a local origin:
+//   direct (TLS)      → the floor: TCP + TLS + h1 exchange
+//   via proxy (plain) → + one proxy hop
+//   via proxy (MITM)  → + CONNECT, two TLS legs, the full engine path
+// "Measurement before optimization" (MILESTONE-0): no target at M0 — these
+// numbers are the baseline the V0.1 exit criteria refer to.
+// ---------------------------------------------------------------------------
+
+enum BenchPath {
+    Direct,
+    ProxyPlain,
+    ProxyMitm,
+}
+
+async fn measure(
+    proxy: &LabProxy,
+    origin: &LabOrigin,
+    plain_origin: Option<std::net::SocketAddr>,
+    via: BenchPath,
+    warmup: u32,
+    n: u32,
+) -> AetherResult<Vec<f64>> {
+    let mut samples = Vec::with_capacity(n as usize);
+    for i in 0..warmup + n {
+        let d = match via {
+            BenchPath::Direct => lab::timed_request(proxy, origin, &Path::Direct).await?,
+            BenchPath::ProxyPlain => {
+                lab::timed_plain(proxy, plain_origin.expect("plain origin")).await?
+            }
+            BenchPath::ProxyMitm => lab::timed_request(proxy, origin, &Path::ProxyMitm).await?,
+        };
+        if i >= warmup {
+            samples.push(d.as_secs_f64() * 1000.0);
+        }
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    Ok(samples)
+}
+
+fn report(name: &str, samples: &[f64]) {
+    let mean = samples.iter().sum::<f64>() / samples.len().max(1) as f64;
+    println!(
+        "  {name:<22} p50={:>7.2}ms  p95={:>7.2}ms  p99={:>7.2}ms  mean={:>7.2}ms  (n={})",
+        lab::percentile(samples, 0.50),
+        lab::percentile(samples, 0.95),
+        lab::percentile(samples, 0.99),
+        mean,
+        samples.len()
+    );
+}
+
+pub async fn proxy(requests: u32) -> AetherResult<()> {
+    println!("Aether proxy latency bench — {requests} requests per path");
+    println!("  origin : local TLS echo (self-signed), fresh connection per request");
+    println!("  proxy  : embedded engine — real pipeline + SQLite storage (WAL)");
+
+    let origin = lab::spawn_tls_origin("bench.local").await?;
+    let plain_origin = lab::spawn_plain_origin().await?;
+    let lab_proxy = lab::spawn_proxy(None).await?;
+    let warmup = (requests / 10).clamp(5, 50);
+
+    let direct = measure(
+        &lab_proxy,
+        &origin,
+        None,
+        BenchPath::Direct,
+        warmup,
+        requests,
+    )
+    .await?;
+    let plain = measure(
+        &lab_proxy,
+        &origin,
+        Some(plain_origin),
+        BenchPath::ProxyPlain,
+        warmup,
+        requests,
+    )
+    .await?;
+    let mitm = measure(
+        &lab_proxy,
+        &origin,
+        None,
+        BenchPath::ProxyMitm,
+        warmup,
+        requests,
+    )
+    .await?;
+
+    println!("\nresults (lower is better):");
+    report("direct (TLS)", &direct);
+    report("via proxy (plain)", &plain);
+    report("via proxy (MITM)", &mitm);
+
+    let p50 = |v: &[f64]| lab::percentile(v, 0.50);
+    println!("\nadded overhead vs direct (p50):");
+    println!("  plain proxy hop : +{:.2}ms", p50(&plain) - p50(&direct));
+    println!(
+        "  MITM tunnel     : +{:.2}ms (includes a 2nd TLS handshake per request)",
+        p50(&mitm) - p50(&direct)
+    );
+    println!("\nbaseline recorded for MILESTONE-0 criterion 11 (measurement before optimization).");
+    Ok(())
+}
+
 pub async fn flows(n: u64, db: Option<PathBuf>, keep: bool) -> AetherResult<()> {
     let (_dir_guard, path): (Option<tempfile::TempDir>, PathBuf) = match &db {
         Some(p) => (None, p.clone()),

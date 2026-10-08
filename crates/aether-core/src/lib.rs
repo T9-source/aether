@@ -37,7 +37,7 @@ pub use events::{
 pub use hooks::{Hook, HookAction, HookRegistry, HookResult};
 pub use model::{
     Body, Flow, FlowId, FlowMeta, Header, Headers, HttpVersion, Method, Request, Response,
-    StatusCode, TransportProto, Url,
+    StatusCode, TransportProto, Url, WsDirection, WsKind, WsMessage, WsSession,
 };
 pub use pipeline::{Pipeline, PipelineVerdict};
 pub use rules::{

@@ -19,6 +19,7 @@ pub mod server;
 pub mod tls;
 pub mod upstream;
 pub mod wire;
+pub mod ws;
 
 pub use ca::CaManager;
 pub use engine::{ConnInfo, EngineOutcome, FlowEngine};

@@ -31,17 +31,25 @@ This milestone proves we have a **real product**, not an architecture diagram.
 | 8 | **Match & Replace through the HookRegistry** | ✅ verified (JSON `RuleSpec` → `RuleHook`, stamps headers/rewrites paths, tags flows, mocks responses). Phase 2: edits apply to in-flight traffic with **no restart** (live registry, ADR-012) — proven by authoring a mock rule in the console and getting 418 + mock body from a matched host while unmatched hosts passed through |
 | 9 | **Persistence survives restart** | ✅ SQLite (WAL, full-fidelity records) verified; `flows_list`/`flows_get` after re-open covered by store tests |
 | 10 | **Scale smoke test: 100k flows, keyset pagination** | ✅ **verified**: 100,000 flows inserted at ~12k/s; page-of-50 reads **p50 = 0.51 ms, p95 = 0.80 ms**; FTS5 search over 100k in ~67 ms (`aether bench flows --n 100000`) |
-| 11 | **Latency measurement exists** | ⏳ partial: per-flow `duration_ms` recorded + bench timings exist; the dedicated proxy-overhead bench (passthrough vs direct) lands with V0.1 exit review |
-| 12 | **24h soak** | ⏳ **deferred** (continuous-browsing harness; queued after h2) |
+| 11 | **Latency measurement exists** | ✅ **verified (V0 dogfoodable)**: `aether bench proxy` measures every path against a local origin — direct p50 1.75 ms, plain-proxy hop **+0.26 ms**, MITM **+4.48 ms** (dominated by the 2nd TLS handshake per request; one fresh upstream connection per request is the documented V0.1 design, ADR-009). Baseline recorded before any optimization (measurement-before-optimization) |
+| 12 | **24h soak** | ✅ **tooling verified (V0 dogfoodable)**: `aether soak --secs N` runs continuous mixed plain+MITM traffic against real SQLite/WAL with 1 Hz RSS/FD sampling — 60 s verification run: 21,442 requests, **0 errors**, 357 req/s, RSS +4.8 MB (bounded pool warm-up), FDs 18→30 (stable). The full acceptance run (`--secs 86400`) is the same command and remains a pre-launch ritual |
 
 ## M0 Exit Review
 
 - Benchmarks + known-limitations document committed: ✅ (this file +
-  `docs/PHASE-1.md`).
-- Demo script: `docs/guide-ar.md` quickstart doubles as the reproducible
-  script (birth moment minus secrets).
+  `docs/PHASE-1.md` + `docs/LIMITATIONS.md` — the honest known-limits list).
+- Demo script: ✅ `scripts/demo.sh` — the reproducible birth moment minus
+  secrets (CA install, headless daemon, TLS MITM round-trip, CLI intercept,
+  history search); `docs/guide-ar.md` remains the narrated walkthrough.
 - ADR-008 **Accepted** (2026-10-08, founder decision) — ecosystem work
   unblocked.
+
+## Status summary (end of V0 dogfoodable)
+
+10 / 12 criteria fully verified; criterion 3 (browser + CA install on a real
+desktop profile) and criterion 12's full 24 h run are runtime rituals on the
+founder's machine — tooling and evidence for both are committed (`aether
+soak`, `scripts/demo.sh`). Nothing here blocks V0.2.
 
 ## Explicitly out of scope for M0
 

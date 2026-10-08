@@ -70,6 +70,16 @@ aether bench flows --n 100000
 # insert ≈12k/s · list page(50) p50 ≈ 0.5 ms · FTS5 search ≈ 70 ms over 100k
 ```
 
+Latency baseline & steady-state health (Milestone-0 #11/#12, V0 dogfoodable):
+
+```bash
+aether bench proxy          # direct vs plain-proxy vs MITM (p50/p95/p99)
+aether soak --secs 60       # continuous traffic + RSS/FD sampling (--secs 86400 = the 24h run)
+scripts/demo.sh             # the birth moment, reproducible in ~30s, minus secrets
+```
+
+Known limits are documented, not hidden: see `docs/LIMITATIONS.md`.
+
 ---
 
 ## Structure
