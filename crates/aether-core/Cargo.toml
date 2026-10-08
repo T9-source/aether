@@ -1,0 +1,17 @@
+[package]
+name = "aether-core"
+description = "Aether domain core: traffic model, pipeline, events — UI/network/storage independent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+base64 = { workspace = true }
+ts-rs = { workspace = true }

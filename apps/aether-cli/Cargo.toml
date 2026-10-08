@@ -1,0 +1,19 @@
+[package]
+name = "aether-cli"
+description = "Aether CLI — a thin client of the Aether core daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "aether"
+path = "src/main.rs"
+
+[dependencies]
+aether-core = { path = "../../crates/aether-core" }
+clap = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
