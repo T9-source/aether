@@ -1,3 +1,5 @@
 /target
-crates/aether-core/bindings
-*.aether
+**/*.db
+**/*.db-wal
+**/*.db-shm
+aether-ca.pem

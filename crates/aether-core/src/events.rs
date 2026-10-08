@@ -20,6 +20,24 @@ pub enum HookStage {
     OnFlowComplete,
 }
 
+/// Which leg of the exchange is held for manual inspection (Phase 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum InterceptDirection {
+    Request,
+    Response,
+}
+
+/// What the operator decided for a held flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum InterceptDecision {
+    Forward,
+    Drop,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
@@ -59,6 +77,32 @@ pub enum AetherEvent {
     FindingCreated {
         flow_id: FlowId,
         title: String,
+    },
+    // ── Phase 1 (proxy engine) ──────────────────────────────────────────
+    /// A flow is parked awaiting an operator decision.
+    InterceptHold {
+        flow_id: FlowId,
+        direction: InterceptDirection,
+    },
+    InterceptReleased {
+        flow_id: FlowId,
+        direction: InterceptDirection,
+        decision: InterceptDecision,
+    },
+    /// The exchange was dropped (rule, hook, or operator) — no response served.
+    FlowDropped {
+        flow_id: FlowId,
+        reason: String,
+    },
+    /// A CONNECT was tunneled blindly (pass-through list, ADR-004) — not
+    /// recorded, not parsed, by design.
+    PassThrough {
+        authority: String,
+    },
+    /// Non-fatal daemon/engine problem worth surfacing in the UI.
+    ErrorOccurred {
+        context: String,
+        message: String,
     },
 }
 

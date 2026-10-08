@@ -1,25 +1,23 @@
-//! `aether` CLI — a thin client of the same core the GUI will use.
+//! `aether` CLI — a thin client of the Aether daemon (ADR-001).
+//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
 //!
-//! Architecture invariant (kill-the-UI, ADR-001): everything below works with
-//! **zero** UI crates in the picture. At Phase 0 the `demo` command runs the
-//! first architectural proof:
-//!
-//! ```text
-//! Request → RequestContext → Hook A → Hook B → Events → Modified Request
-//! ```
+//! Everything here works with **zero** UI crates in the picture:
+//! `serve` starts the daemon; every other command is a WebSocket client of
+//! the running daemon (kill-the-UI invariant, ADR-001).
 
-use aether_core::{
-    AetherResult, Capabilities, Hook, HookAction, HookRegistry, HookResult, Pipeline,
-    RequestContext, Scope, TrafficSource, Url,
-};
-use async_trait::async_trait;
+mod client;
+mod commands;
+
+use aether_core::error::AetherResult;
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
     name = "aether",
     version,
-    about = "Aether — local-first, open-source API security proxy (Phase 0 core)"
+    about = "Aether — local-first, open-source, developer-first API security proxy",
+    author = "smart-jemy"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -28,63 +26,353 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Start the Aether daemon (proxy + control plane).
+    Serve {
+        /// TOML config file (defaults are used when absent).
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Proxy listen override, e.g. 127.0.0.1:8888.
+        #[arg(long)]
+        listen: Option<String>,
+        /// Control-plane listen override.
+        #[arg(long)]
+        control: Option<String>,
+        /// Keep history in RAM only (nothing touches the disk).
+        #[arg(long)]
+        memory: bool,
+        /// Data directory (default ~/.aether).
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+    /// CA management (the MITM root; ADR-004).
+    Ca {
+        #[command(subcommand)]
+        command: CaCommand,
+    },
+    /// Inspect recorded flows.
+    Flows {
+        #[command(subcommand)]
+        command: FlowsCommand,
+    },
+    /// Manual interception (hold / edit / drop / release).
+    Intercept {
+        #[command(subcommand)]
+        command: InterceptCommand,
+    },
+    /// Match & replace rules (serialized hooks, ADR-006).
+    Rules {
+        #[command(subcommand)]
+        command: RulesCommand,
+    },
+    /// Local benchmarks against the storage backend.
+    Bench {
+        #[command(subcommand)]
+        command: BenchCommand,
+    },
     /// Run the Phase-0 architectural proof through the real pipeline.
     Demo,
     /// Print the architecture invariants this binary guarantees.
     Info,
+    /// Project meta: who builds Aether, under which license.
+    About,
 }
 
-/// Hook A (priority -10): classify into the context (ctx-only touch →
-/// deliberately produces no `RequestModified`).
-struct Classifier;
-
-#[async_trait]
-impl Hook for Classifier {
-    fn name(&self) -> &str {
-        "classifier"
-    }
-    fn priority(&self) -> i32 {
-        -10
-    }
-    async fn on_request(
-        &self,
-        ctx: &mut RequestContext,
-        req: &mut aether_core::Request,
-    ) -> HookResult {
-        let classified = if req.url.host.contains("api") {
-            "api"
-        } else {
-            "web"
-        };
-        ctx.set_data("classified", serde_json::json!(classified));
-        Ok(HookAction::Continue)
-    }
+#[derive(Subcommand)]
+enum CaCommand {
+    /// Print the PEM of the proxy CA (install it in your browser/OS).
+    Export {
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Print where the CA files live.
+    Path {
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
 }
 
-/// Hook B (priority 0): stamp the request (model touch → `RequestModified`).
-struct TouchStamp;
+#[derive(Subcommand)]
+enum FlowsCommand {
+    /// List the newest flows (keyset-paginated).
+    List {
+        #[arg(long, default_value_t = 25)]
+        limit: u32,
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long)]
+        method: Option<String>,
+        #[arg(long)]
+        before: Option<u64>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Show one flow in full (headers + bodies).
+    Show {
+        id: u64,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Search flows (FTS5-backed on the daemon).
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 25)]
+        limit: u32,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+}
 
-#[async_trait]
-impl Hook for TouchStamp {
-    fn name(&self) -> &str {
-        "touch-stamp"
-    }
-    async fn on_request(
-        &self,
-        _ctx: &mut RequestContext,
-        req: &mut aether_core::Request,
-    ) -> HookResult {
-        req.set_header("x-aether-touched", "hook-b");
-        Ok(HookAction::Continue)
-    }
+#[derive(Subcommand)]
+enum InterceptCommand {
+    /// List currently held flows.
+    Ls {
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Dump a held request/response as JSON (edit it, then `release --from-file`).
+    Show {
+        id: u64,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Drop a held flow (the client gets a 502).
+    Drop {
+        id: u64,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Forward a held flow — optionally edited.
+    Release {
+        id: u64,
+        /// Full edited payload JSON (as printed by `intercept show`).
+        #[arg(long)]
+        from_file: Option<PathBuf>,
+        /// Add/replace a request header "Name: value" (repeatable).
+        #[arg(long = "header")]
+        headers: Vec<String>,
+        /// Remove a request header (repeatable).
+        #[arg(long = "remove-header")]
+        remove_headers: Vec<String>,
+        /// Replace the request path (including query).
+        #[arg(long)]
+        path: Option<String>,
+        /// Replace the request body with file contents.
+        #[arg(long)]
+        body_file: Option<PathBuf>,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Toggle interception phases.
+    Set {
+        #[arg(long, value_parser = clap::value_parser!(bool))]
+        request: Option<bool>,
+        #[arg(long, value_parser = clap::value_parser!(bool))]
+        response: Option<bool>,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RulesCommand {
+    /// List rules.
+    Ls {
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Add a rule from a JSON file (or stdin with `-`).
+    Add {
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Remove a rule.
+    Rm {
+        id: u64,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Enable a rule.
+    Enable {
+        id: u64,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+    /// Disable a rule (kept, but not applied).
+    Disable {
+        id: u64,
+        #[arg(long)]
+        control: Option<String>,
+        #[arg(long)]
+        token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum BenchCommand {
+    /// Insert N synthetic flows into SQLite and time pagination/search.
+    /// The Milestone-0 scale gate: `aether bench flows --n 100000`.
+    Flows {
+        #[arg(long, default_value_t = 10_000)]
+        n: u64,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Keep the generated database after the run.
+        #[arg(long)]
+        keep: bool,
+    },
 }
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Demo => demo().await,
-        Commands::Info => info(),
+        Commands::Serve {
+            config,
+            listen,
+            control,
+            memory,
+            data_dir,
+        } => commands::serve::run(config, listen, control, memory, data_dir).await,
+        Commands::Ca { command } => match command {
+            CaCommand::Export {
+                out,
+                control,
+                token,
+            } => commands::ca::export(out, control, token).await,
+            CaCommand::Path { data_dir } => commands::ca::path(data_dir),
+        },
+        Commands::Flows { command } => match command {
+            FlowsCommand::List {
+                limit,
+                host,
+                method,
+                before,
+                json,
+                control,
+                token,
+            } => commands::flows::list(limit, host, method, before, json, control, token).await,
+            FlowsCommand::Show {
+                id,
+                json,
+                control,
+                token,
+            } => commands::flows::show(id, json, control, token).await,
+            FlowsCommand::Search {
+                query,
+                limit,
+                json,
+                control,
+                token,
+            } => commands::flows::search(query, limit, json, control, token).await,
+        },
+        Commands::Intercept { command } => match command {
+            InterceptCommand::Ls {
+                json,
+                control,
+                token,
+            } => commands::intercept::ls(json, control, token).await,
+            InterceptCommand::Show { id, control, token } => {
+                commands::intercept::show(id, control, token).await
+            }
+            InterceptCommand::Drop { id, control, token } => {
+                commands::intercept::drop(id, control, token).await
+            }
+            InterceptCommand::Release {
+                id,
+                from_file,
+                headers,
+                remove_headers,
+                path,
+                body_file,
+                control,
+                token,
+            } => {
+                commands::intercept::release(
+                    id,
+                    from_file,
+                    headers,
+                    remove_headers,
+                    path,
+                    body_file,
+                    control,
+                    token,
+                )
+                .await
+            }
+            InterceptCommand::Set {
+                request,
+                response,
+                control,
+                token,
+            } => commands::intercept::set(request, response, control, token).await,
+        },
+        Commands::Rules { command } => match command {
+            RulesCommand::Ls {
+                json,
+                control,
+                token,
+            } => commands::rules::ls(json, control, token).await,
+            RulesCommand::Add {
+                file,
+                control,
+                token,
+            } => commands::rules::add(file, control, token).await,
+            RulesCommand::Rm { id, control, token } => {
+                commands::rules::rm(id, control, token).await
+            }
+            RulesCommand::Enable { id, control, token } => {
+                commands::rules::set_enabled(id, true, control, token).await
+            }
+            RulesCommand::Disable { id, control, token } => {
+                commands::rules::set_enabled(id, false, control, token).await
+            }
+        },
+        Commands::Bench { command } => match command {
+            BenchCommand::Flows { n, db, keep } => commands::bench::flows(n, db, keep).await,
+        },
+        Commands::Demo => commands::demo::run().await,
+        Commands::Info => commands::demo::info(),
+        Commands::About => commands::demo::about(),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");
@@ -92,76 +380,21 @@ async fn main() {
     }
 }
 
-fn info() -> AetherResult<()> {
-    println!("Aether Phase 0 — architecture invariants:");
-    println!("  1. aether-core knows nothing about hyper/TLS/SQLite/WebSocket/Tauri/React");
-    println!("  2. GUI, CLI and CI are all just clients of the core (ADR-001)");
-    println!("  3. every pipeline stage routes through the HookRegistry (ADR-006 #1)");
-    println!("  4. hook signatures are serialization-shaped (ADR-006 #2)");
-    println!("  5. hooks carry a timeout budget, enforced by the pipeline (ADR-006 #5)");
-    println!("  6. every security-relevant state change is an event (primitive #3)");
-    println!("Run `aether demo` to watch the proof execute.");
-    Ok(())
+/// Shared connection context for remote commands.
+pub(crate) struct Conn {
+    pub control: Option<String>,
+    pub token: Option<String>,
 }
 
-async fn demo() -> AetherResult<()> {
-    println!("── Phase 0 architectural proof ─────────────────────────────");
+pub(crate) fn data_dir(flag: Option<&PathBuf>) -> PathBuf {
+    flag.cloned()
+        .or_else(|| std::env::var("AETHER_DATA_DIR").ok().map(PathBuf::from))
+        .unwrap_or_else(aether_daemon::default_data_dir)
+}
 
-    // The same core a GUI/automation client would drive — no UI in sight.
-    let bus = aether_core::EventBus::new(64);
-    let mut registry = HookRegistry::new();
-    registry.register_fn(Classifier);
-    registry.register_fn(TouchStamp);
-    let pipeline = Pipeline::new(registry, bus.clone());
-
-    // Subscribe BEFORE running: an event consumer is just another client.
-    let mut events = bus.subscribe();
-
-    let mut ctx = RequestContext::new(18342, TrafficSource::Proxy);
-    ctx.scope = Scope::include(&["*.example.com"]);
-    ctx.capabilities = Capabilities::proxy_defaults();
-
-    let mut req =
-        aether_core::Request::post(Url::parse("https://api.example.com/v1/users/42?id=7")?);
-    req.set_header("content-type", "application/json");
-    req.set_header("user-agent", "demo-client/1.0");
-    req.body = aether_core::Body::text(r#"{"id": 42}"#);
-
-    println!("initial request : {} {}", req.method.as_str(), req.url);
-    println!("scope match     : {}", ctx.in_scope(&req.url.host));
-
-    let verdict = pipeline.run_request(&mut ctx, &mut req).await?;
-
-    let mut res = aether_core::Response::new(200)?;
-    res.set_header("content-type", "application/json");
-    res.body = aether_core::Body::text(r#"{"id": 42, "email": "u42@example.com"}"#);
-    let verdict_r = pipeline.run_response(&mut ctx, &mut res).await?;
-
-    let mut flow = aether_core::Flow::new(ctx.flow_id, req.clone());
-    flow.response = Some(res.clone());
-    flow.add_tag(
-        ctx.get_data("classified")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown"),
-    );
-    pipeline.complete_flow(&ctx, &flow).await?;
-
-    pipeline.report_finding(ctx.flow_id, "demo: object id looks user-controlled");
-
-    println!("verdict         : req={verdict:?} res={verdict_r:?}");
-    println!("ctx.classified  : {}", ctx.get_data("classified").unwrap());
-    println!("flow tags       : {:?}", flow.meta.tags);
-    println!(
-        "final header    : x-aether-touched={}",
-        req.header("x-aether-touched").unwrap_or("MISSING")
-    );
-    println!("── events (as the control plane would deliver them) ────────");
-    while let Some(ev) = events.try_next() {
-        println!(
-            "  {}",
-            serde_json::to_string(&ev).expect("events are serializable")
-        );
-    }
-    println!("── proof complete: core ran standalone, zero UI crates ─────");
-    Ok(())
+pub(crate) async fn connect(conn: &Conn) -> AetherResult<client::ControlClient> {
+    let dd = data_dir(None);
+    let addr = client::resolve_addr(conn.control.as_deref(), &dd);
+    let token = client::resolve_token(conn.token.as_deref(), &dd)?;
+    client::ControlClient::connect(&addr, &token).await
 }

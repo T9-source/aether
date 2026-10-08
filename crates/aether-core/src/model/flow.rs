@@ -20,6 +20,15 @@ pub enum TransportProto {
     Quic,
 }
 
+/// Best-effort TLS facts recorded for a proxied exchange (ADR-004).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+#[ts(export)]
+pub struct TlsMeta {
+    pub version: Option<String>,
+    pub cipher: Option<String>,
+    pub alpn: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct FlowMeta {
@@ -29,6 +38,9 @@ pub struct FlowMeta {
     pub client_proto: TransportProto,
     /// Transport of the server leg (Aether ↔ origin).
     pub server_proto: TransportProto,
+    /// TLS facts for the server leg when it spoke TLS (MITM leg details).
+    #[serde(default)]
+    pub tls: Option<TlsMeta>,
     /// Ordered, de-duplicated tags (set by hooks — ADR-006 rule #1).
     pub tags: Vec<String>,
 }
@@ -40,6 +52,7 @@ impl FlowMeta {
             duration_ms: None,
             client_proto: TransportProto::Plaintext,
             server_proto: TransportProto::Plaintext,
+            tls: None,
             tags: Vec::new(),
         }
     }

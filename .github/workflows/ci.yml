@@ -19,8 +19,13 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --all
-      - name: TypeScript bindings (generated + verified by tests)
-        run: cargo test -p aether-core --test ts_bindings
+        run: cargo test --workspace
+      - name: TypeScript bindings freshness (ADR-002)
+        run: |
+          cargo test -p aether-core --test ts_bindings
+          git diff --exit-code crates/aether-core/bindings || {
+            echo "::error::TS bindings are stale — run cargo test and commit";
+            exit 1;
+          }

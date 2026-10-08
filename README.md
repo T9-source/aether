@@ -1,44 +1,105 @@
 # Aether
 
-**Local-first, open-source API security proxy built for developers** —
+**Local-first, open-source, developer-first API security proxy** —
 with a long-term ambition to become a programmable security workspace.
 
-> Status: **Phase 0 complete** — architectural primitives proven.
-> See [`docs/PHASE-0.md`](docs/PHASE-0.md) and [`docs/adr/`](docs/adr/README.md).
+> Status: **Phase 1 complete** — the real proxy works end to end:
+> `aether serve` + a browser on HTTPS = zero certificate errors, full flow
+> history, live match & replace rules, manual interception from the CLI.
+>
+> See [`docs/PHASE-1.md`](docs/PHASE-1.md) · [`docs/PHASE-0.md`](docs/PHASE-0.md) · [`docs/adr/`](docs/adr/README.md)
+
+---
+
+## Quickstart (2 minutes)
+
+```bash
+# 1) start the daemon (history in RAM for a first look)
+cargo run -p aether-cli -- serve --memory
+
+# 2) export & install the CA once (browser → import as trusted root CA)
+cargo run -p aether-cli -- ca export --out aether-ca.pem
+
+# 3) point any client at the proxy and browse https://…
+curl -x http://127.0.0.1:8888 --cacert aether-ca.pem https://example.com/
+
+# 4) watch history from a second terminal
+cargo run -p aether-cli -- flows list
+cargo run -p aether-cli -- flows show 1
+```
+
+Manual interception (the Burp-style loop, from the CLI only — no UI needed):
+
+```bash
+aether intercept set --request on        # hold new requests
+aether intercept ls                      # see held flows
+aether intercept show 7                  # dump as JSON
+aether intercept release 7 --header "X-Reviewed: yes" --body-file req.json
+aether intercept drop 7                  # or kill it (client gets 502)
+```
+
+Match & replace rules — pure JSON, live over the control plane:
+
+```bash
+aether rules add --file examples/rule-stamp-header.json
+aether rules ls
+```
+
+Scale gate (Milestone-0 #10):
+
+```bash
+aether bench flows --n 100000
+# insert ≈12k/s · list page(50) p50 ≈ 0.5 ms · FTS5 search ≈ 70 ms over 100k
+```
+
+---
 
 ## Structure
 
 ```
 aether/
 ├── crates/
-│   └── aether-core/        # domain core: traffic model, pipeline, events
-│       └── bindings/       # generated TypeScript types (ts-rs, CI-verified)
+│   ├── aether-core/          # domain core: traffic model, pipeline, events,
+│   │   └── bindings/         #   rules, storage port — zero protocol knowledge
+│   ├── aether-http/          # network engine: hand-rolled h1 (wire truth),
+│   │                         #   TLS MITM (rustls+rcgen), CA, intercept, engine
+│   ├── aether-store-sqlite/  # ADR-005 backend: WAL, keyset pagination, FTS5
+│   └── aether-daemon/        # state owner: proxy+storage+control plane wiring
 ├── apps/
-│   └── aether-cli/         # `aether` — thin client of the core (kill-the-UI invariant)
+│   └── aether-cli/           # `aether` — pure WS client of the daemon (ADR-001)
+├── examples/                 # aether.toml + rule files
 ├── docs/
-│   ├── adr/                # architecture decision records (8 ADRs, all Accepted)
-│   └── PHASE-0.md          # definition of done + status + proof transcript
-└── .github/workflows/ci.yml
+│   ├── adr/                  # 11 accepted ADRs, all linked to code
+│   ├── PHASE-0.md            # primitives: DoD + proof
+│   ├── PHASE-1.md            # real proxy: DoD + scale numbers
+│   └── guide-ar.md           # quickstart بالعربي
+└── .github/workflows/ci.yml  # fmt + clippy -D warnings + tests + TS bindings
 ```
 
 ## Architecture invariants
 
-1. `aether-core` knows nothing about hyper / TLS / SQLite / WebSocket / Tauri / React.
-2. GUI, CLI and CI are all just clients of the core daemon (ADR-001).
-3. Every pipeline stage routes through the `HookRegistry` (ADR-006 #1).
-4. Hook signatures are serialization-shaped — WASM-cut later is a hosting
-   change, not a redesign (ADR-006 #2).
-5. Every security-relevant state change is an event (primitive #3).
+1. `aether-core` knows nothing about TLS / SQLite / WebSocket / Tauri / React
+   / wire codecs. `regex` is its only computational dependency.
+2. GUI, CLI and CI are all just clients of the daemon (ADR-001) — killing the
+   UI never touches traffic.
+3. Every pipeline stage routes through the `HookRegistry`; match & replace
+   ships as serialized `RuleSpec`s → `RuleHook`s (ADR-006 #1/#2).
+4. Every security-relevant state change is an event on the bus; drops are
+   *tagged decisions*, never silent failures.
+5. The proxy owns its bytes: hand-rolled h1 codec, original header order and
+   casing preserved, ambiguous framings refused loudly (ADR-009).
 
-## Try the Phase-0 proof
+## Roadmap (frozen ladder)
 
-```bash
-cargo run -p aether-cli -- demo   # Request → ctx → hooks → events → modified request
-cargo run -p aether-cli -- info   # invariants summary
-cargo test --all                  # 60 tests
-```
+| Version | Scope | Status |
+|---------|-------|--------|
+| V0.1 | h1 + TLS MITM + history + intercept + rules + control plane | ✅ **shipped (Phase 1)** |
+| V0.2 | h2 inspection, WebSocket, upstream pooling, spooling | next |
+| V0.3 | WASM plugins (Extism) + plugin SDK | planned |
+| V1.0 | query language, fuzzing, automation, AI layer (BYO-key, off by default) | planned |
 
-## License
+## Founder
 
-Apache-2.0 — see [ADR-008](docs/adr/ADR-008-license-and-business-model.md)
-for the ratified license & business-model decision.
+Built by **smart-jemy**. Apache-2.0 — see [LICENSE](LICENSE) and
+[ADR-008](docs/adr/ADR-008-license-and-business-model.md). Zero telemetry,
+ever.

@@ -40,6 +40,12 @@ pub enum AetherError {
     #[error("network error: {0}")]
     Network(String),
 
+    #[error("tls error: {0}")]
+    Tls(String),
+
+    #[error("protocol error: {0}")]
+    Protocol(String),
+
     #[error("storage error: {0}")]
     Storage(String),
 }
@@ -51,6 +57,43 @@ impl AetherError {
 
     pub fn unsupported(msg: impl Into<String>) -> Self {
         Self::Unsupported(msg.into())
+    }
+
+    pub fn network(msg: impl Into<String>) -> Self {
+        Self::Network(msg.into())
+    }
+
+    pub fn tls(msg: impl Into<String>) -> Self {
+        Self::Tls(msg.into())
+    }
+
+    pub fn protocol(msg: impl Into<String>) -> Self {
+        Self::Protocol(msg.into())
+    }
+
+    pub fn storage(msg: impl Into<String>) -> Self {
+        Self::Storage(msg.into())
+    }
+
+    pub fn config(msg: impl Into<String>) -> Self {
+        Self::Config(msg.into())
+    }
+
+    /// Stable machine-readable kind name (control-plane error shape, ADR-010).
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::InvalidInput(_) => "invalid_input",
+            Self::Config(_) => "config",
+            Self::Serialization(_) => "serialization",
+            Self::Hook { .. } => "hook",
+            Self::HookTimeout { .. } => "hook_timeout",
+            Self::Aborted { .. } => "aborted",
+            Self::Unsupported(_) => "unsupported",
+            Self::Network(_) => "network",
+            Self::Tls(_) => "tls",
+            Self::Protocol(_) => "protocol",
+            Self::Storage(_) => "storage",
+        }
     }
 }
 

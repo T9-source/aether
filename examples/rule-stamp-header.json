@@ -1,0 +1,8 @@
+{
+  "name": "stamp-review",
+  "enabled": true,
+  "stage": "request",
+  "host_include": ["*.example.com"],
+  "host_exclude": ["admin.example.com"],
+  "action": { "kind": "set_request_header", "name": "X-Reviewed", "value": "yes" }
+}

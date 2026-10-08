@@ -14,7 +14,7 @@ pub mod response;
 pub mod url;
 
 pub use body::Body;
-pub use flow::{Flow, FlowId, FlowMeta, TransportProto};
+pub use flow::{Flow, FlowId, FlowMeta, TlsMeta, TransportProto, unix_millis_now};
 pub use headers::{Header, Headers};
 pub use request::{HttpVersion, Method, Request};
 pub use response::{Response, StatusCode};

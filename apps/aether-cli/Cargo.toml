@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "aether"
@@ -13,7 +14,17 @@ path = "src/main.rs"
 
 [dependencies]
 aether-core = { path = "../../crates/aether-core" }
+aether-daemon = { path = "../../crates/aether-daemon" }
+aether-store-sqlite = { path = "../../crates/aether-store-sqlite" }
 clap = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+
+tempfile = { workspace = true }
+
+[dev-dependencies]

@@ -1,43 +1,37 @@
-# Aether — Architecture Decision Records
+# ADR Index — Aether
 
-**Aether** is a local-first, open-source API security proxy built for developers,
-with a long-term ambition to become a programmable security workspace.
-
-> Wedge: developers who build and test modern APIs (OpenAPI / GraphQL / JWT / OAuth / WebSocket).
-> Expansion path: security researchers, bug bounty hunters, AppSec engineers.
-> North star rule: **Don't build 50 features. Build 5 primitives that enable 50 features.**
-
-The five primitives (frozen):
-1. **Traffic Model** — protocol-agnostic Flow representation (h1 + h2 semantics)
-2. **Pipeline** — single unified traffic pipeline with hook points
-3. **Event System** — EventBus emitting every security-relevant state change
-4. **Plugin Architecture** — internal extension points from day 1, WASM runtime later
-5. **Storage / Query Engine** — SQLite-first, abstraction trait, HTTPQL-like query later (new name required — HTTPQL is Caido's feature name)
-
-## Status Index
+Architecture Decision Records. One decision, one file, permanent status.
+**Author of record: smart-jemy** (founder). All statuses below are final.
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| [ADR-001](ADR-001-core-daemon.md) | Core daemon vs in-process | **Accepted** |
-| [ADR-002](ADR-002-control-plane.md) | Control plane transport | **Accepted** (amended) |
-| [ADR-003](ADR-003-http-stack.md) | HTTP stack & protocol roadmap | **Accepted** |
-| [ADR-004](ADR-004-tls.md) | TLS interception & certificates | **Accepted** |
-| [ADR-005](ADR-005-storage.md) | Storage engine | **Accepted** |
-| [ADR-006](ADR-006-plugin-runtime.md) | Plugin runtime (deferred) | **Accepted** |
-| [ADR-007](ADR-007-http3-strategy.md) | HTTP/3, QUIC, ECH & interception strategy | **Accepted** |
-| [ADR-008](ADR-008-license-and-business-model.md) | License & business model | **Accepted** (Apache-2.0) |
-| [MILESTONE-0](MILESTONE-0.md) | Milestone 0 acceptance criteria ("birth moment") | **Active** |
+| [001](ADR-001-core-daemon.md) | Core daemon independent of any UI | Accepted |
+| [002](ADR-002-control-plane.md) | WebSocket + JSON control plane | Accepted (amended) |
+| [003](ADR-003-http-stack.md) | HTTP stack: h1 first, h2 semantics in the model, wire truth | Accepted |
+| [004](ADR-004-tls.md) | TLS MITM: rustls + rcgen, per-project CA, pass-through | Accepted |
+| [005](ADR-005-storage.md) | Storage: SQLite via sqlx, keyset pagination, FTS5 | Accepted |
+| [006](ADR-006-plugin-runtime.md) | Plugin architecture early, plugin runtime late | Accepted |
+| [007](ADR-007-http3-strategy.md) | HTTP/3 strategy: explicit proxy, no h3 interception | Accepted |
+| [008](ADR-008-license-and-business-model.md) | License & business model: Apache-2.0 + BYO-key AI, zero telemetry | Accepted |
+| [009](ADR-009-network-stack.md) | Network stack: tokio + rustls + rcgen, **hand-rolled h1** | Accepted |
+| [010](ADR-010-control-plane-protocol.md) | Control-plane protocol v1 (ops, auth, origin) | Accepted |
+| [011](ADR-011-body-capture-policy.md) | Body capture policy + upstream TLS knobs | Accepted |
 
-## ADR Lifecycle
+## Where each decision lives in code
 
-`Proposed → Accepted → Superseded`. An Accepted ADR can only be changed by a
-new ADR that supersedes it, never by editing history silently.
+- **ADR-001** → `crates/aether-daemon` (state owner) vs `apps/aether-cli` (pure client)
+- **ADR-002/010** → `crates/aether-daemon/src/control.rs`
+- **ADR-003** → `crates/aether-core/src/model/` + `crates/aether-http/src/wire.rs`
+- **ADR-004** → `crates/aether-http/src/{ca,tls,server}.rs`
+- **ADR-005** → `crates/aether-core/src/storage.rs` (port) + `crates/aether-store-sqlite` (impl)
+- **ADR-006** → `crates/aether-core/src/{hooks,pipeline,rules}.rs`
+- **ADR-007** → explicit proxy only (`aether-http/src/server.rs`); h3 out of scope by design
+- **ADR-008** → `LICENSE`, `NOTICE`, README licensing section
+- **ADR-009** → `crates/aether-http/src/{wire,upstream,server}.rs`
+- **ADR-011** → capture limits in `crates/aether-http/src/{wire,upstream,engine}.rs`
 
-## Version Ladder (frozen)
+## Convention
 
-| Version | Theme | Scope |
-|---------|-------|-------|
-| **V0.1** | Usable MVP | HTTP/1.1 + TLS MITM, intercept, history, replay, match & replace, scope/pass-through, SQLite, daemon + Tauri UI + CLI |
-| **V0.2** | Modern Web | HTTP/2 (ALPN, streams), then WebSocket inspection |
-| **V0.3** | Extensibility | WASM plugin host (Extism), permissions, 3 dogfood plugins, public SDK |
-| **V1.0** | Security Platform | Query language, tagging, smart diff, Intruder-style fuzzing, automation, OpenAPI/GraphQL awareness, AI layer (last) |
+- English for ADRs and code (open-source convention), Arabic user docs where
+  they help the founder (`docs/guide-ar.md`).
+- Superseded ADRs are never edited — a new ADR replaces them.

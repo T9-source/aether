@@ -1,0 +1,7 @@
+Aether — local-first API security proxy
+Copyright 2026 smart-jemy
+
+This product includes software developed by smart-jemy and contributors.
+
+Licensed under the Apache License, Version 2.0. Third-party crates are
+governed by their own licenses (see Cargo.lock and the crates.io registry).

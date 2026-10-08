@@ -1,0 +1,20 @@
+[package]
+name = "aether-store-sqlite"
+description = "Aether storage backend: SQLite via sqlx (WAL, keyset pagination, FTS5 with graceful fallback)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+aether-core = { path = "../aether-core" }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

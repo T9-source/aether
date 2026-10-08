@@ -1,0 +1,10 @@
+{
+  "name": "v1-to-v2",
+  "enabled": true,
+  "stage": "request",
+  "action": {
+    "kind": "replace_request_path",
+    "pattern": "^/api/v1/",
+    "replacement": "/api/v2/"
+  }
+}

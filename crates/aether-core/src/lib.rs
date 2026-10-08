@@ -13,10 +13,11 @@
 //!
 //! ## Dependency discipline (hard invariant)
 //!
-//! This crate may only depend on runtime/serialization plumbing (`serde`,
-//! `tokio`, `async-trait`, `thiserror`, `base64`, `ts-rs`).
-//! It must **never** know about `hyper`, TLS, SQLite, WebSocket, Tauri or React.
-//! `tokio` here is the async runtime and timeout budget only — zero protocol
+//! This crate may only depend on runtime/serialization/computation plumbing
+//! (`serde`, `tokio`, `async-trait`, `thiserror`, `base64`, `ts-rs`, `regex`).
+//! It must **never** know about TLS, SQLite, WebSocket, Tauri, React — or any
+//! HTTP wire codec. `tokio` here is the async runtime and timeout budget only;
+//! `regex` is pure computation for the serialized rule layer. Zero protocol
 //! knowledge lives in this crate.
 
 pub mod context;
@@ -25,13 +26,21 @@ pub mod events;
 pub mod hooks;
 pub mod model;
 pub mod pipeline;
+pub mod rules;
+pub mod storage;
 
 pub use context::{Capabilities, RequestContext, Scope, TrafficSource};
 pub use error::{AetherError, AetherResult};
-pub use events::{AetherEvent, EventBus, EventSubscription, HookStage};
+pub use events::{
+    AetherEvent, EventBus, EventSubscription, HookStage, InterceptDecision, InterceptDirection,
+};
 pub use hooks::{Hook, HookAction, HookRegistry, HookResult};
 pub use model::{
     Body, Flow, FlowId, FlowMeta, Header, Headers, HttpVersion, Method, Request, Response,
     StatusCode, TransportProto, Url,
 };
 pub use pipeline::{Pipeline, PipelineVerdict};
+pub use rules::{
+    RespondWith, RuleAction, RuleHook, RuleSpec, RuleStage, drain_ctx_tags, take_respond_with,
+};
+pub use storage::{FlowPage, FlowQuery, FlowStats, FlowSummary, MemoryStorage, Storage};

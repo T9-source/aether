@@ -1,0 +1,27 @@
+# Aether daemon configuration — see docs/adr/ (all Accepted).
+# Place at ~/.aether/aether.toml or pass --config.
+
+[proxy]
+listen = "127.0.0.1:8888"
+
+[control]
+listen = "127.0.0.1:9099"
+# token = "fixed-token-for-scripts"   # generated per-run when absent
+
+[storage]
+backend = "sqlite"                    # "sqlite" | "memory"
+# path = "/var/lib/aether/aether.db"  # default: <data_dir>/aether.db
+
+[intercept]
+request = false
+response = false
+
+# Certificate-pinned / sensitive domains: tunneled blindly, never recorded (ADR-004)
+passthrough = []
+
+# Lab-only knobs (ADR-011)
+upstream_tls_verify = true
+capture_max_body = 8388608            # 8 MiB per body
+
+[host_overrides]
+# "mock.local" = "socket://127.0.0.1:8443"
