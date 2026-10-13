@@ -7,6 +7,7 @@ pub mod demo;
 pub mod flows;
 pub mod intercept;
 pub(crate) mod lab;
+pub mod mcp;
 pub mod rules;
 pub mod serve;
 pub mod soak;

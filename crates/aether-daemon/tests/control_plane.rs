@@ -49,6 +49,7 @@ async fn spawn_daemon() -> TestDaemon {
         upstream_tls_verify: false,
         upstream_alpn_h2: true,
         capture_max_body: 8 * 1024 * 1024,
+        plugins: vec![],
     };
     cfg.proxy.listen = "127.0.0.1:0".into();
     let info = daemon_run(DaemonOptions {
@@ -140,7 +141,7 @@ impl WsClient {
 
     async fn send(&mut self, req: ControlRequest) {
         let text = serde_json::to_string(&req).unwrap();
-        self.ws.send(Message::Text(text)).await.unwrap();
+        self.ws.send(Message::Text(text.into())).await.unwrap();
     }
 
     /// Next response (skips event frames).

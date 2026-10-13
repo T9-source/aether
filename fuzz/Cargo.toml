@@ -1,0 +1,50 @@
+[package]
+name = "aether-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+# Standalone workspace root — kept out of the product workspace so sanitizer
+# flags can never reach the release build.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace on purpose (ADR-018 gate): fuzzing pulls libFuzzer +
+# nightly sanitizer flags that must never leak into the product build. The
+# three targets are exactly the parsers that touch untrusted bytes:
+#   fuzz_h1            → h1 request/response head codec (wire.rs)
+#   fuzz_ws            → RFC 6455 frame reader + fragment assembler (ws.rs)
+#   fuzz_control_json  → control-plane JSON decoder (control.rs)
+# Everything else in the workspace is driven by these parsers, so a memory
+# bug here is a memory bug in the proxy.
+
+[dependencies]
+libfuzzer-sys = "0.4"
+aether-core = { path = "../crates/aether-core" }
+aether-http = { path = "../crates/aether-http" }
+aether-daemon = { path = "../crates/aether-daemon" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "io-util"] }
+
+[[bin]]
+name = "fuzz_h1"
+path = "fuzz_targets/fuzz_h1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_ws"
+path = "fuzz_targets/fuzz_ws.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_control_json"
+path = "fuzz_targets/fuzz_control_json.rs"
+test = false
+doc = false
+bench = false

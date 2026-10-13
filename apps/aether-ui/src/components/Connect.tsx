@@ -1,17 +1,28 @@
 import { useState } from "react";
+import { CaWizard } from "./CaWizard";
 
 export interface ConnectProps {
   initialUrl: string;
-  initialToken: string;
+  /** daemon auth value, prefilled from a deep link or a saved session */
+  initialAuth: string;
   busy: boolean;
   error: string | null;
-  onConnect: (url: string, token: string) => void;
+  /** set when this connect attempt came from a saved session / deep link */
+  autoNote: string | null;
+  /** called with (controlWsUrl, auth) on submit */
+  onConnect: (url: string, auth: string) => void;
 }
 
-/** First-run screen: point the console at a local daemon and present the token. */
+/**
+ * First-run screen: point the console at a local daemon and present the
+ * daemon auth value. The one-click path (`aether serve` prints a deep link
+ * containing both values) lands here pre-filled and auto-connects —
+ * see lib/conn.ts.
+ */
 export function Connect(props: ConnectProps) {
   const [url, setUrl] = useState(props.initialUrl);
-  const [token, setToken] = useState(props.initialToken);
+  const [auth, setAuth] = useState(props.initialAuth);
+  const [showCa, setShowCa] = useState(false);
 
   return (
     <div className="connect-wrap">
@@ -40,10 +51,16 @@ export function Connect(props: ConnectProps) {
           local-first · developer-first · AI-native API security proxy
         </p>
 
+        {props.autoNote !== null && (
+          <div className="connect-auto" data-testid="auto-note">
+            {props.autoNote}
+          </div>
+        )}
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            props.onConnect(url.trim(), token.trim());
+            props.onConnect(url.trim(), auth.trim());
           }}
         >
           <label className="field">
@@ -59,24 +76,30 @@ export function Connect(props: ConnectProps) {
           <label className="field">
             <span>Auth token</span>
             <input
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="paste the token from `aether serve`"
+              value={auth}
+              onChange={(e) => setAuth(e.target.value)}
+              placeholder="paste the daemon auth value from `aether serve`"
               spellCheck={false}
               type="password"
             />
           </label>
           {props.error !== null && <div className="connect-error">{props.error}</div>}
-          <button className="btn primary wide" disabled={props.busy || token.trim() === ""}>
+          <button className="btn primary wide" disabled={props.busy || auth.trim() === ""}>
             {props.busy ? "Connecting…" : "Connect"}
           </button>
         </form>
 
+        <button className="linklike" onClick={() => setShowCa(!showCa)} data-testid="ca-toggle">
+          {showCa ? "▾" : "▸"} HTTPS setup (CA) — 60 seconds
+        </button>
+        {showCa && <CaWizard caPath={null} onDone={() => setShowCa(false)} />}
+
         <div className="connect-help">
-          <h3>Where is the token?</h3>
+          <h3>Where is the auth value?</h3>
           <ul>
             <li>
-              printed by <code>aether serve</code> at startup, and
+              printed by <code>aether serve</code> at startup — or open the
+              <b> one-click console link </b> it prints, and you're already connected;
             </li>
             <li>
               stored in <code>~/.aether/token</code> (0600, daemon-owned).

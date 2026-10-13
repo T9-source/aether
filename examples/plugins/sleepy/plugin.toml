@@ -1,0 +1,6 @@
+name = "sleepy"
+version = "0.3.0"
+wasm = "plugin.wasm"
+timeout_ms = 10
+max_pages = 64
+capabilities = []

@@ -1,0 +1,32 @@
+{
+  "direct_tls": {
+    "_name": "direct_tls",
+    "mean_ms": 0.366,
+    "n": 400,
+    "p50_ms": 0.294,
+    "p95_ms": 0.331,
+    "p99_ms": 0.419
+  },
+  "overhead_p50_ms": {
+    "mitm": 1.151,
+    "plain": 0.302
+  },
+  "requests_per_path": 400,
+  "schema": "aether-bench-proxy/1",
+  "via_proxy_mitm": {
+    "_name": "via_proxy_mitm",
+    "mean_ms": 1.895,
+    "n": 400,
+    "p50_ms": 1.445,
+    "p95_ms": 1.652,
+    "p99_ms": 25.43
+  },
+  "via_proxy_plain": {
+    "_name": "via_proxy_plain",
+    "mean_ms": 0.867,
+    "n": 400,
+    "p50_ms": 0.596,
+    "p95_ms": 0.751,
+    "p99_ms": 0.974
+  }
+}

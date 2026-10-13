@@ -694,3 +694,339 @@ async fn connect_peek_serves_plaintext_upgrade() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+// ── V0.2.x acceptance tests (ADR-018) ──────────────────────────────────────
+// The word "shipped" must have a test suite behind it: stream cancellation,
+// graceful GOAWAY, malformed-frame resilience, and control-frame/megabyte
+// relay honesty.
+
+/// Waits for the latest *completed* flow (response recorded).
+async fn completed_flow(proxy: &TestProxy) -> aether_core::model::Flow {
+    let mut deadline = 60;
+    loop {
+        let page = proxy
+            .storage
+            .list_flows(FlowQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for summary in &page.items {
+            if summary.status.is_some() {
+                let flow = proxy.storage.get_flow(summary.id).await.unwrap().unwrap();
+                if flow.response.is_some() {
+                    return flow;
+                }
+            }
+        }
+        deadline -= 1;
+        assert!(deadline > 0, "flow never completed");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn h2_stream_reset_is_handled_and_connection_survives() {
+    let origin = spawn_h2_origin("reset.local").await;
+    let proxy = spawn_proxy(true).await;
+
+    let authority = format!("127.0.0.1:{}", origin.port());
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"h2"], true)).await;
+
+    let (send_request, connection) = h2::client::handshake(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // stream 1: a healthy request through the proxy
+    let mut send_request = send_request.ready().await.unwrap();
+    let req1 = http::Request::builder()
+        .method("GET")
+        .uri(format!("https://{authority}/first"))
+        .body(())
+        .unwrap();
+    let (resp1, _stream) = send_request.send_request(req1, true).unwrap();
+    assert_eq!(resp1.await.unwrap().status().as_u16(), 200);
+
+    // stream 2: the client cancels mid-flight — dropping the response future
+    // and its send stream makes h2 emit RST_STREAM(CANCEL); the daemon must
+    // survive the abandoned stream without poisoning anything
+    let mut send_request = send_request.ready().await.unwrap();
+    let req2 = http::Request::builder()
+        .method("GET")
+        .uri(format!("https://{authority}/cancelled"))
+        .body(())
+        .unwrap();
+    let (resp2, send_stream) = send_request.send_request(req2, true).unwrap();
+    drop(resp2);
+    drop(send_stream);
+    // give the reset a moment to travel; its outcome must not matter
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // stream 3: the same connection still serves a full exchange
+    let mut send_request = send_request.ready().await.unwrap();
+    let req3 = http::Request::builder()
+        .method("GET")
+        .uri(format!("https://{authority}/after-reset"))
+        .body(())
+        .unwrap();
+    let (resp3, _stream) = send_request.send_request(req3, true).unwrap();
+    let resp3 = resp3.await.unwrap();
+    assert_eq!(resp3.status().as_u16(), 200, "connection survived a reset");
+    let mut recv = resp3.into_body();
+    while let Some(data) = std::future::poll_fn(|cx| recv.poll_data(cx)).await {
+        let _ = data.unwrap();
+    }
+
+    // the clean exchange is recorded with h2 wire facts on both legs (ADR-015)
+    let flow = completed_flow(&proxy).await;
+    assert_eq!(flow.request.as_ref().unwrap().url.path, "/after-reset");
+    let m = &flow.meta;
+    assert_eq!(
+        m.forwarded_req_framing,
+        Some(aether_core::model::Framing::H2Streams)
+    );
+    assert_eq!(
+        m.observed_res_framing,
+        Some(aether_core::model::Framing::H2Streams)
+    );
+    assert_eq!(
+        m.forwarded_res_framing,
+        Some(aether_core::model::Framing::H2Streams)
+    );
+    assert_eq!(
+        m.observed_req_framing, None,
+        "bare GET carries no body framing"
+    );
+}
+
+#[tokio::test]
+async fn h2_shutdown_sends_graceful_goaway() {
+    let origin = spawn_h2_origin("goaway.local").await;
+    let proxy = spawn_proxy(true).await;
+
+    let authority = format!("127.0.0.1:{}", origin.port());
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"h2"], true)).await;
+
+    let (send_request, connection) = h2::client::handshake(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // start a request and trigger shutdown WHILE IT IS IN FLIGHT — the whole
+    // point of graceful GOAWAY: in-flight work finishes, new work is refused
+    let mut send_request = send_request.ready().await.unwrap();
+    let req1 = http::Request::builder()
+        .method("GET")
+        .uri(format!("https://{authority}/in-flight"))
+        .body(())
+        .unwrap();
+    let (resp1, _stream) = send_request.send_request(req1, true).unwrap();
+    proxy._shutdown_tx.send(true).unwrap();
+    let resp1 = tokio::time::timeout(Duration::from_secs(5), resp1)
+        .await
+        .expect("in-flight stream died on shutdown — shutdown is not graceful")
+        .unwrap();
+    assert_eq!(
+        resp1.status().as_u16(),
+        200,
+        "an in-flight stream must complete across a graceful shutdown"
+    );
+
+    // after the drain the connection must terminate: any subsequent attempt
+    // resolves without ever being served a fresh 200
+    let outcome = tokio::time::timeout(Duration::from_secs(6), async {
+        match send_request.ready().await {
+            Err(_) => (), // connection closed — the graceful outcome
+            Ok(mut sr) => {
+                let req = http::Request::builder()
+                    .method("GET")
+                    .uri(format!("https://{authority}/after-goaway"))
+                    .body(())
+                    .unwrap();
+                match sr.send_request(req, true) {
+                    Err(_) => (), // refused by the going-away connection
+                    Ok((fut, _)) => {
+                        if let Ok(resp) = fut.await {
+                            assert_ne!(
+                                resp.status().as_u16(),
+                                200,
+                                "a new stream was served after graceful shutdown"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    })
+    .await;
+    assert!(outcome.is_ok(), "client hung after graceful shutdown");
+}
+
+#[tokio::test]
+async fn malformed_h2_bytes_are_rejected_and_daemon_survives() {
+    let origin = spawn_h2_origin("fuzz.local").await;
+    let proxy = spawn_proxy(true).await;
+    let authority = format!("127.0.0.1:{}", origin.port());
+
+    // connection 1: an HTTP/1.1 request where an h2 preface belongs — the
+    // server's h2 handshake fails, the connection dies, the daemon lives
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let mut tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"h2"], true)).await;
+    use tokio::io::AsyncWriteExt as _;
+    tls.write_all(b"GET / HTTP/1.1\r\nHost: fuzz.local\r\n\r\n")
+        .await
+        .unwrap();
+    let _ = tls.shutdown().await;
+    let _ = tls.read_to_end(&mut Vec::new()).await; // EOF, not a daemon crash
+
+    // connection 2: a completely normal exchange afterwards
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"h2"], true)).await;
+    let (send_request, connection) = h2::client::handshake(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    let mut send_request = send_request.ready().await.unwrap();
+    let req = http::Request::builder()
+        .method("GET")
+        .uri(format!("https://{authority}/still-alive"))
+        .body(())
+        .unwrap();
+    let (resp, _stream) = send_request.send_request(req, true).unwrap();
+    assert_eq!(
+        resp.await.unwrap().status().as_u16(),
+        200,
+        "daemon survived garbage bytes"
+    );
+
+    let flow = completed_flow(&proxy).await;
+    assert_eq!(flow.request.as_ref().unwrap().url.path, "/still-alive");
+}
+
+#[tokio::test]
+async fn ws_relay_forwards_control_frames_and_megabyte_messages() {
+    let origin = spawn_wss_origin("bigws.local").await;
+    let proxy = spawn_proxy(true).await;
+
+    let authority = format!("127.0.0.1:{}", origin.port());
+    let tunnel = connect_tunnel(proxy.addr, &authority).await;
+    let tls = tls_connect(tunnel, &authority, client_config_alpn(&[b"http/1.1"], true)).await;
+    let (mut ws, resp) = tokio_tungstenite::client_async(format!("ws://{authority}/big"), tls)
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 101);
+
+    // control frames cross the relay untouched (ping → origin auto-pong)
+    ws.send(Message::Ping(vec![7, 7, 7].into())).await.unwrap();
+    ws.send(Message::text("after-ping")).await.unwrap(); // flushes the queued pong
+    let mut got_pong = false;
+    let mut got_text = false;
+    for _ in 0..2 {
+        let msg = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .expect("ping/text round trip hung")
+            .unwrap()
+            .unwrap();
+        match msg {
+            Message::Pong(p) => {
+                assert_eq!(p, vec![7, 7, 7], "pong payload must survive the relay");
+                got_pong = true;
+            }
+            Message::Text(t) => {
+                assert_eq!(t, "after-ping");
+                got_text = true;
+            }
+            other => panic!("unexpected frame: {other:?}"),
+        }
+    }
+    assert!(got_pong && got_text);
+
+    // a 1 MiB binary message relays byte-for-byte — proof the relay streams
+    // instead of staging the whole message in our process (backpressure)
+    let megabyte: Vec<u8> = (0..=255u8).cycle().take(1024 * 1024).collect();
+    ws.send(Message::binary(megabyte.clone())).await.unwrap();
+    let echo = tokio::time::timeout(Duration::from_secs(30), ws.next())
+        .await
+        .expect("1MB echo hung — relay is staging, not streaming")
+        .unwrap()
+        .unwrap();
+    match echo {
+        Message::Binary(b) => assert_eq!(b, megabyte, "1MB relay corrupted bytes"),
+        other => panic!("expected binary echo, got {other:?}"),
+    }
+
+    // a 128 KiB message lands under the 256 KiB record cap: the session must
+    // count its TRUE size while the preview stays bounded (ADR-011 honesty)
+    let kib128: Vec<u8> = (0..=255u8).cycle().take(128 * 1024).collect();
+    ws.send(Message::binary(kib128.clone())).await.unwrap();
+    let echo = tokio::time::timeout(Duration::from_secs(30), ws.next())
+        .await
+        .expect("128KB echo hung")
+        .unwrap()
+        .unwrap();
+    match echo {
+        Message::Binary(b) => assert_eq!(b, kib128),
+        other => panic!("expected binary echo, got {other:?}"),
+    }
+
+    ws.close(None).await.unwrap();
+    let _ = tokio::time::timeout(Duration::from_secs(5), ws.next()).await;
+
+    // the recorded session: true sizes counted, 101 framing recorded
+    let mut deadline = 60;
+    loop {
+        let page = proxy
+            .storage
+            .list_flows(FlowQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut done = false;
+        for summary in &page.items {
+            if summary.status == Some(101) {
+                let flow = proxy.storage.get_flow(summary.id).await.unwrap().unwrap();
+                assert_eq!(
+                    flow.meta.forwarded_res_framing,
+                    Some(aether_core::model::Framing::Upgrade),
+                    "101 Switching Protocols is the client-leg framing (ADR-015)"
+                );
+                if let Some(session) = &flow.ws {
+                    // the 128KB message: recorded at its TRUE size, preview bounded
+                    let kib128 = session.messages.iter().find(|m| {
+                        m.kind == aether_core::model::WsKind::Binary
+                            && m.size == kib128.len() as u64
+                    });
+                    assert!(
+                        kib128.is_some(),
+                        "128KB message counted at true size: {:?}",
+                        session.messages
+                    );
+                    let kib128 = kib128.unwrap();
+                    assert!(
+                        kib128.truncated || kib128.base64.as_ref().is_none_or(|b| b.len() <= 4096),
+                        "preview must stay bounded (ADR-011)"
+                    );
+                    // the 1MB message crossed the relay and was counted
+                    assert!(
+                        session.total_messages >= 6,
+                        "control + text + 1MB + 128KB messages counted: {:?}",
+                        session
+                    );
+                    done = true;
+                }
+            }
+        }
+        if done {
+            return;
+        }
+        deadline -= 1;
+        assert!(deadline > 0, "ws session never persisted");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

@@ -2,22 +2,37 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
 
+# One push at a time: overlapping runs would race the perf budget gate
+# (shared-runner noise) and burn fuzz minutes (audit LOW).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege for every job; write tokens only where explicitly granted.
+permissions:
+  contents: read
+
 jobs:
   test:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Core dependency policy (ADR-014)
+        run: bash scripts/check-core-deps.sh
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
@@ -30,14 +45,66 @@ jobs:
             exit 1;
           }
 
+  security:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
+      - name: Install cargo-deny (checksum-pinned — audit M7)
+        run: |
+          echo "0e8c2aa59128612c90d9e09c02204e912f29a5b8d9a64671b94608cbe09e064f  /tmp/cd.tar.gz" > /tmp/cd.sha256
+          curl -sL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.19.0/cargo-deny-0.19.0-x86_64-unknown-linux-musl.tar.gz -o /tmp/cd.tar.gz
+          sha256sum -c /tmp/cd.sha256
+          tar -xzf /tmp/cd.tar.gz -C /tmp
+          sudo install /tmp/cargo-deny-0.19.0-x86_64-unknown-linux-musl/cargo-deny /usr/local/bin/
+      - name: Supply chain gate (ADR-018 item 2)
+        run: cargo deny check
+
+  perf:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
+      - name: Build release
+        run: cargo build --release -p aether-cli
+      - name: Performance budget gate (ADR-018 item 5)
+        run: bash scripts/check-perf-budget.sh 300
+
+  fuzz-smoke:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # nightly
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
+        with:
+          workspaces: |
+            .
+            fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version 0.13.2
+      - name: Smoke-fuzz the untrusted-bytes parsers (ADR-018 item 3)
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: |
+          cargo fuzz build
+          cargo fuzz run fuzz_h1 -- -max_total_time=20 -rss_limit_mb=2048
+          cargo fuzz run fuzz_ws -- -max_total_time=20 -rss_limit_mb=2048
+          cargo fuzz run fuzz_control_json -- -max_total_time=20 -rss_limit_mb=2048
+
   ui:
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: apps/aether-ui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm

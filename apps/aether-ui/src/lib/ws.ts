@@ -44,6 +44,8 @@ const MAX_RETRIES = 12;
 
 export class ControlClient {
   private ws: WSLike | null = null;
+  /** Set when the daemon rejected our credentials — reconnect is pointless. */
+  private authFailed = false;
   private pending: Pending[] = [];
   private eventHandlers = new Set<(e: AetherEvent) => void>();
   private statusHandlers = new Set<(s: ConnStatus, detail?: string) => void>();
@@ -98,6 +100,7 @@ export class ControlClient {
             resolve(this.hello);
           } else {
             const e = frame.error as ControlError | undefined;
+            this.authFailed = true;
             this.emitStatus("auth-failed", e?.message);
             reject(e ?? { kind: "auth", message: "authentication failed" });
           }
@@ -112,10 +115,20 @@ export class ControlClient {
 
       ws.onclose = () => {
         this.ws = null;
+        // Audit LOW: drop every in-flight request on a socket loss — after a
+        // reconnect the fresh daemon would answer them in FIFO order and
+        // replies would land on the wrong callers.
+        this.failAllPending({ kind: "network", message: "socket closed" });
         if (!settled) {
           settled = true;
           this.emitStatus("reconnecting");
           reject({ kind: "network", message: "socket closed during handshake" });
+        }
+        // A rejected auth never retries: the token is wrong, hammering the
+        // daemon 12 more times just spams the log (audit LOW).
+        if (this.authFailed) {
+          this.emitStatus("closed", "authentication failed — not retrying");
+          return;
         }
         this.scheduleReconnect();
       };

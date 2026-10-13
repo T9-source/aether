@@ -13,7 +13,8 @@ use ts_rs::TS;
 
 macro_rules! export_all {
     ($($t:ty),+ $(,)?) => {
-        $( <$t as TS>::export_all().expect(concat!("export failed for ", stringify!($t))); )+
+        $( <$t as TS>::export_all(&ts_rs::Config::default())
+            .expect(concat!("export failed for ", stringify!($t))); )+
     };
 }
 

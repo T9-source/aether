@@ -1,0 +1,20 @@
+# mute — exports no hook stages at all (spike example, ADR-019).
+# Valid wasm, valid manifest shape, zero subscriptions: the host must
+# refuse to load it ("exports neither on_request nor on_response").
+
+[package]
+name = "aether-plugin-example-mute"
+version = "0.3.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+extism-pdk = "1.4.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace]

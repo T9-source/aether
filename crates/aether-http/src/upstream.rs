@@ -28,6 +28,9 @@ pub struct UpstreamReply {
     /// `Some` when the body exceeded the capture limit: the unparsed rest of
     /// the body, ready to stream to the client.
     pub remainder: Option<Remainder>,
+    /// Wire fact (ADR-015): did the upstream leg speak HTTP/2? Framing facts
+    /// on the flow are decided from this — h2 has no h1 message framing.
+    pub leg_h2: bool,
 }
 
 /// Wire stream to the origin. (TLS wraps TCP — the 40-byte delta is the
@@ -274,6 +277,7 @@ pub async fn open_upgrade(req: &Request, cfg: &UpstreamCfg) -> AetherResult<Upgr
         reply: UpstreamReply {
             response,
             remainder,
+            leg_h2: false,
         },
     })
 }
@@ -316,6 +320,7 @@ async fn h1_exchange(
     Ok(UpstreamReply {
         response,
         remainder,
+        leg_h2: false,
     })
 }
 

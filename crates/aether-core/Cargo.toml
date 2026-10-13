@@ -12,7 +12,16 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
-tokio = { workspace = true }
 base64 = { workspace = true }
 ts-rs = { workspace = true }
 regex = { workspace = true }
+# ADR-014 (zero infrastructure/protocol dependencies): core takes tokio
+# *primitives only* — `sync` (the broadcast bus) and `time` (the hook
+# timeout budget). No runtime, no net, no fs. Deliberately NOT inherited
+# from the workspace dep (whose features serve the daemon/http crates).
+tokio = { version = "1", default-features = false, features = ["sync", "time"] }
+
+[dev-dependencies]
+# `#[tokio::test]` needs a runtime — tests only, so the invariant holds
+# for every consumer of the library (ADR-014).
+tokio = { version = "1", features = ["rt", "macros"] }

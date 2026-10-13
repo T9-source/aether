@@ -80,9 +80,25 @@ enum Commands {
         /// Persist flows to this SQLite file instead of a tempdir.
         #[arg(long)]
         db: Option<PathBuf>,
+        /// Enforce ADR-018 budgets (RSS drift, FD growth, zero errors) and
+        /// exit non-zero on breach — the gate mode for CI.
+        #[arg(long)]
+        assert_mode: bool,
     },
     /// Run the Phase-0 architectural proof through the real pipeline.
     Demo,
+    /// Expose the daemon to MCP clients (Claude Desktop, VS Code, ...) over stdio.
+    Mcp {
+        /// Control-plane address (default: flag > env > data_dir > 127.0.0.1:9099)
+        #[arg(long)]
+        control: Option<String>,
+        /// Auth token for the control plane (default: env AETHER_TOKEN > data_dir file)
+        #[arg(long)]
+        auth: Option<String>,
+        /// Enable mutating tools (intercept set/drop, rules remove). Default: read-only.
+        #[arg(long)]
+        allow_write: bool,
+    },
     /// Print the architecture invariants this binary guarantees.
     Info,
     /// Project meta: who builds Aether, under which license.
@@ -276,6 +292,9 @@ enum BenchCommand {
     Proxy {
         #[arg(long, default_value_t = 300)]
         requests: u32,
+        /// Write machine-readable results (ADR-018 perf gate) to this file.
+        #[arg(long)]
+        json: Option<PathBuf>,
     },
 }
 
@@ -386,10 +405,20 @@ async fn main() {
         },
         Commands::Bench { command } => match command {
             BenchCommand::Flows { n, db, keep } => commands::bench::flows(n, db, keep).await,
-            BenchCommand::Proxy { requests } => commands::bench::proxy(requests).await,
+            BenchCommand::Proxy { requests, json } => commands::bench::proxy(requests, json).await,
         },
-        Commands::Soak { secs, workers, db } => commands::soak::run(secs, workers, db).await,
+        Commands::Soak {
+            secs,
+            workers,
+            db,
+            assert_mode,
+        } => commands::soak::run(secs, workers, db, assert_mode).await,
         Commands::Demo => commands::demo::run().await,
+        Commands::Mcp {
+            control,
+            auth,
+            allow_write,
+        } => commands::mcp::run(control, auth, allow_write).await,
         Commands::Info => commands::demo::info(),
         Commands::About => commands::demo::about(),
     };

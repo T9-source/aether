@@ -1,0 +1,1 @@
+{"op":"rules_add","params":{"spec":{"match":{"host":"api.example.com","path":"/v1"},"action":{"tag":"api"}},"enabled":true}}

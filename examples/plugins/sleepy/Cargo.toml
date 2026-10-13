@@ -1,0 +1,21 @@
+# sleepy — the timeout proof (spike example, ADR-019).
+# Sleeps 500ms via 500 × 1ms WASI sleeps under a 10ms budget: the host's
+# epoch interruption must cut it off, mapping to AetherError::HookTimeout.
+# Export on_request only — also proves single-stage subscription detection.
+
+[package]
+name = "aether-plugin-example-sleepy"
+version = "0.3.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+extism-pdk = "1.4.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace]

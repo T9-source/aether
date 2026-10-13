@@ -13,7 +13,7 @@
 //! storage; every drop is a *decision* (rule, hook, or operator) that gets
 //! tagged on the flow, never a silent failure.
 
-use aether_core::model::{Body, Flow, FlowId, Request, Response, TlsMeta, TransportProto};
+use aether_core::model::{Body, Flow, FlowId, Framing, Request, Response, TlsMeta, TransportProto};
 use aether_core::storage::Storage;
 use aether_core::{
     AetherEvent, EventBus, InterceptDirection, Pipeline, PipelineVerdict, RequestContext,
@@ -26,12 +26,16 @@ use std::time::Instant;
 use crate::intercept::{HeldDecision, HeldPayload, InterceptState};
 use crate::tls::TlsFacts;
 use crate::upstream::{self, Remainder, UpstreamCfg};
+use crate::wire::BodySpec;
 
 /// Connection facts captured by the listener before the model is built.
 #[derive(Debug, Clone)]
 pub struct ConnInfo {
     pub client_addr: SocketAddr,
     pub client_proto: TransportProto,
+    /// Wire fact (ADR-015): did the *client* leg negotiate HTTP/2? Framing
+    /// facts served to the client are decided from this.
+    pub client_h2: bool,
     pub tls: Option<TlsFacts>,
 }
 
@@ -101,6 +105,9 @@ impl FlowEngine {
             cipher: t.cipher,
             alpn: t.alpn,
         });
+        // Wire fact (ADR-015): the request as the client's wire delivered it
+        // — before intercept/hooks/rules can reshape it.
+        flow.meta.observed_req_framing = framing_of_request(&request);
         self.bus.publish(AetherEvent::FlowStarted { flow_id });
         if let Err(e) = self.storage.put_flow(&flow).await {
             self.bus.publish(AetherEvent::ErrorOccurred {
@@ -179,6 +186,7 @@ impl FlowEngine {
             Some(res) => Ok(upstream::UpstreamReply {
                 response: res.clone(),
                 remainder: None,
+                leg_h2: false,
             }),
             None => upstream::send_request(&request, &self.upstream_cfg).await,
         };
@@ -203,6 +211,19 @@ impl FlowEngine {
             flow_id,
             status: response.status.code,
         });
+
+        // Wire facts (ADR-015): what crossed the upstream wire. `observed`
+        // is the origin's own framing; `forwarded` is ours. A mocked response
+        // crosses no upstream wire — both stay `None` by design.
+        if mocked.is_none() {
+            if reply.leg_h2 {
+                flow.meta.forwarded_req_framing = Some(Framing::H2Streams);
+                flow.meta.observed_res_framing = Some(Framing::H2Streams);
+            } else {
+                flow.meta.forwarded_req_framing = forwarded_h1_req_framing(&request);
+                flow.meta.observed_res_framing = framing_of_response(&response);
+            }
+        }
 
         // ── intercept: response phase (fully-captured bodies only — edited
         // bodies cannot be reconciled with a streaming remainder) ─────────
@@ -265,6 +286,24 @@ impl FlowEngine {
         aether_http_strip_request_hop_by_hop(&mut request);
 
         // ── persist + complete ───────────────────────────────────────────
+        // Wire fact (ADR-015): the framing the client leg will actually see.
+        flow.meta.forwarded_res_framing = if conn.client_h2 {
+            Some(Framing::H2Streams)
+        } else if reply.remainder.is_some() {
+            // Streaming passthrough: an origin-declared CL travels verbatim;
+            // an undeclared length can only be honestly served EOF-delimited
+            // (RFC 9110 §6.3 — server.rs picks exactly this framing).
+            if response.headers.contains("content-length") {
+                Some(Framing::ContentLength)
+            } else {
+                Some(Framing::CloseDelimited)
+            }
+        } else if response.body.is_empty() {
+            None
+        } else {
+            // Fully-buffered bodies are always re-served with an exact CL.
+            Some(Framing::ContentLength)
+        };
         flow.meta.duration_ms = Some(started.elapsed().as_millis() as u64);
         flow.response = Some(response.clone());
         if let Err(e) = self.storage.put_flow(&flow).await {
@@ -311,6 +350,9 @@ impl FlowEngine {
             cipher: t.cipher,
             alpn: t.alpn,
         });
+        // Wire fact (ADR-015): the request as the client's wire delivered it
+        // — before intercept/hooks/rules can reshape it.
+        flow.meta.observed_req_framing = framing_of_request(&request);
         self.bus.publish(AetherEvent::FlowStarted { flow_id });
         if let Err(e) = self.storage.put_flow(&flow).await {
             self.bus.publish(AetherEvent::ErrorOccurred {
@@ -404,6 +446,13 @@ impl FlowEngine {
 
         // ── upstream upgrade (or mock short-circuit) ─────────────────────
         if let Some(res) = &mocked {
+            // Wire fact (ADR-015): the mock crosses no upstream wire, but the
+            // client still receives it — buffered, with an exact CL.
+            flow.meta.forwarded_res_framing = if res.body.is_empty() {
+                None
+            } else {
+                Some(Framing::ContentLength)
+            };
             return match self
                 .finish_upgrade_flow(&mut flow, res.clone(), started)
                 .await
@@ -444,6 +493,11 @@ impl FlowEngine {
                     .await;
             }
         };
+
+        // Wire facts (ADR-015): the upgrade handshake crossed the upstream
+        // h1 wire; a 101 carries no body by definition (maps to `None`).
+        flow.meta.observed_res_framing = framing_of_response(&response);
+        flow.meta.forwarded_req_framing = forwarded_h1_req_framing(&request);
 
         // ── intercept: response phase (101 bodies are empty by definition) ─
         if self.intercept.response_enabled() {
@@ -487,6 +541,23 @@ impl FlowEngine {
             flow.add_tag(&tag);
         }
 
+        // Wire fact (ADR-015): a live `101` turns the wire into a tunnel —
+        // that (and only that) is the response framing served to the client.
+        flow.meta.forwarded_res_framing = if upgraded_stream.is_some() {
+            Some(Framing::Upgrade)
+        } else if conn.client_h2 {
+            Some(Framing::H2Streams)
+        } else if remainder.is_some() {
+            if response.headers.contains("content-length") {
+                Some(Framing::ContentLength)
+            } else {
+                Some(Framing::CloseDelimited)
+            }
+        } else if response.body.is_empty() {
+            None
+        } else {
+            Some(Framing::ContentLength)
+        };
         flow.meta.duration_ms = Some(started.elapsed().as_millis() as u64);
         flow.response = Some(response.clone());
         if let Err(e) = self.storage.put_flow(&flow).await {
@@ -568,4 +639,98 @@ impl FlowEngine {
 /// headers are dropped and `serialize_request` re-adds what it needs.
 fn aether_http_strip_request_hop_by_hop(request: &mut Request) {
     crate::wire::strip_hop_by_hop(&mut request.headers);
+}
+
+// ---------------------------------------------------------------------------
+// wire facts (ADR-015) — observed vs forwarded, kept as explicit model facts
+// ---------------------------------------------------------------------------
+
+/// Observed request framing — from the client's own headers, before any
+/// rewrite by intercept/hooks/rules.
+fn framing_of_request(req: &Request) -> Option<Framing> {
+    match crate::wire::request_body_spec(&req.headers) {
+        Ok(BodySpec::Empty) => None,
+        Ok(BodySpec::ContentLength(_)) => Some(Framing::ContentLength),
+        Ok(BodySpec::Chunked) => Some(Framing::Chunked),
+        Ok(BodySpec::ReadToEnd) => Some(Framing::CloseDelimited),
+        // CL+TE smuggling refusals never reach persistence; `None` is honest
+        // for anything that somehow does.
+        Err(_) => None,
+    }
+}
+
+/// Observed response framing — the origin's own declaration (HEAD, 204/304
+/// and 1xx all map to `Empty` → `None`).
+fn framing_of_response(res: &Response) -> Option<Framing> {
+    match crate::wire::response_body_spec(&res.headers, res.status.code, false) {
+        BodySpec::Empty => None,
+        BodySpec::ContentLength(_) => Some(Framing::ContentLength),
+        BodySpec::Chunked => Some(Framing::Chunked),
+        BodySpec::ReadToEnd => Some(Framing::CloseDelimited),
+    }
+}
+
+/// Forwarded request framing — mirrors `wire::serialize_request`: a real
+/// body, or a client-declared zero-length body, gets an explicit CL; a bare
+/// GET-style request carries no framing at all.
+fn forwarded_h1_req_framing(req: &Request) -> Option<Framing> {
+    if !req.body.is_empty() || req.headers.contains("content-length") {
+        Some(Framing::ContentLength)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod wire_facts_tests {
+    use super::*;
+    use aether_core::model::{Body, Method, Url};
+
+    #[test]
+    fn observed_request_framing_reads_only_declared_framing() {
+        let mut req = Request::new(Method::Post, Url::parse("http://a/b").unwrap());
+        assert_eq!(framing_of_request(&req), None, "no framing declared yet");
+        req.body = Body::text("hello");
+        assert_eq!(
+            framing_of_request(&req),
+            None,
+            "a body alone declares no wire framing"
+        );
+        req.headers.insert("content-length", "5");
+        assert_eq!(framing_of_request(&req), Some(Framing::ContentLength));
+        req.headers.remove("content-length");
+        req.headers.insert("transfer-encoding", "chunked");
+        assert_eq!(framing_of_request(&req), Some(Framing::Chunked));
+    }
+
+    #[test]
+    fn observed_response_framing_follows_rfc9110_cases() {
+        let no_body = Response::new(204).unwrap();
+        assert_eq!(framing_of_response(&no_body), None, "204 has no body");
+
+        let mut res = Response::new(200).unwrap();
+        res.body = Body::text("abc");
+        res.headers.insert("content-length", "3");
+        assert_eq!(framing_of_response(&res), Some(Framing::ContentLength));
+        res.headers.insert("transfer-encoding", "chunked");
+        assert_eq!(framing_of_response(&res), Some(Framing::Chunked));
+    }
+
+    #[test]
+    fn forwarded_request_framing_mirrors_serialize_request() {
+        let mut req = Request::new(Method::Get, Url::parse("http://a/").unwrap());
+        assert_eq!(forwarded_h1_req_framing(&req), None, "bare GET: no framing");
+        req.headers.insert("content-length", "0");
+        assert_eq!(
+            forwarded_h1_req_framing(&req),
+            Some(Framing::ContentLength),
+            "explicit zero-length body keeps its declared framing"
+        );
+        let mut post = Request::new(Method::Post, Url::parse("http://a/").unwrap());
+        post.body = Body::text("x");
+        assert_eq!(
+            forwarded_h1_req_framing(&post),
+            Some(Framing::ContentLength)
+        );
+    }
 }

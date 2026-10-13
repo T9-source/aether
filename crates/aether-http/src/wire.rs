@@ -579,15 +579,21 @@ pub fn serialize_response(res: &Response, keep_alive: bool) -> Vec<u8> {
         )
         .as_bytes(),
     );
+    // Framing is OURS: the body was buffered/de-chunked, so any upstream
+    // Content-Length (especially a duplicated one — a smuggling vector)
+    // is dropped and recomputed exactly (audit M5). The close-delimited
+    // variant below already does this; regular responses now match.
     for h in res.headers.iter() {
+        let name = h.name.to_ascii_lowercase();
+        if name == "content-length" || name == "transfer-encoding" {
+            continue; // stale framing from the origin — never laundered
+        }
         out.extend_from_slice(h.name.as_bytes());
         out.extend_from_slice(b": ");
         out.extend_from_slice(h.value.as_bytes());
         out.extend_from_slice(b"\r\n");
     }
-    if !res.headers.contains("content-length") {
-        out.extend_from_slice(format!("Content-Length: {}\r\n", res.body.len()).as_bytes());
-    }
+    out.extend_from_slice(format!("Content-Length: {}\r\n", res.body.len()).as_bytes());
     out.extend_from_slice(if keep_alive {
         b"Connection: keep-alive\r\n\r\n" as &[u8]
     } else {
@@ -789,6 +795,17 @@ mod tests {
         h2.append("transfer-encoding", "Chunked");
         assert_eq!(request_body_spec(&h2).unwrap(), BodySpec::Chunked);
 
+        // Unsupported TE values are a refusal, not a panic — found by the
+        // ADR-018 fuzzer via `Transfer-Encoding: chunkencoding: chd` (the
+        // harness had the bug; this pins the *product* contract).
+        let mut h3 = Headers::new();
+        h3.append("transfer-encoding", "chunkencoding: chd");
+        let err = request_body_spec(&h3).expect_err("unsupported TE refused");
+        assert!(err.to_string().contains("unsupported Transfer-Encoding"));
+        let mut h4 = Headers::new();
+        h4.append("transfer-encoding", "gzip");
+        assert!(request_body_spec(&h4).is_err());
+
         assert_eq!(
             response_body_spec(&Headers::new(), 204, false),
             BodySpec::Empty
@@ -858,5 +875,26 @@ mod tests {
         let parsed = parse_response_head(&bytes[..bytes.len() - 2], false).unwrap();
         assert_eq!(parsed.status.code, 200);
         assert_eq!(parsed.headers.get("content-type"), Some("application/json"));
+    }
+
+    #[test]
+    fn response_strips_duplicated_content_length_smuggling_vector() {
+        // Audit M5: an origin sending two Content-Length headers must not
+        // have them laundered through the proxy — the client would frame
+        // the body by the first CL while we meant the second. Framing is
+        // recomputed from the buffered body, always.
+        let mut res = Response::new(200).unwrap();
+        res.headers.append("content-length", "5");
+        res.headers.append("content-length", "10");
+        res.body = Body::text("12345");
+        let bytes = serialize_response(&res, true);
+        let s = String::from_utf8(bytes).unwrap();
+        let cls: Vec<&str> = s
+            .lines()
+            .filter(|l| l.to_ascii_lowercase().starts_with("content-length"))
+            .collect();
+        assert_eq!(cls, vec!["Content-Length: 5"], "exactly one recomputed CL");
+        assert!(!s.to_ascii_lowercase().contains("transfer-encoding"));
+        assert!(s.ends_with("\r\n\r\n12345"));
     }
 }

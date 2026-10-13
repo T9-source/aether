@@ -13,11 +13,12 @@
 use aether_core::error::{AetherError, AetherResult};
 use base64::Engine as _;
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyPair, KeyUsagePurpose,
+    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
+    KeyUsagePurpose,
 };
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use rustls::sign::CertifiedKey;
+use rustls_pki_types::pem::PemObject as _;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -28,13 +29,22 @@ const CA_CERT_FILE: &str = "ca.cert.pem";
 const CA_KEY_FILE: &str = "ca.key.pem";
 const LEAF_VALIDITY_DAYS: i64 = 825;
 const CA_VALIDITY_DAYS: i64 = 3650;
+/// Upper bound on cached leaf certs (audit M3). Evictions are invisible to
+/// users: a re-request for an evicted host simply mints a fresh leaf.
+const MAX_LEAF_CACHE: usize = 1024;
+
+/// Map of minted leaves plus recency order (LRU: first entry evicted first).
+type LeafCache = (HashMap<String, Arc<CertifiedKey>>, Vec<String>);
 
 pub struct CaManager {
     dir: PathBuf,
     ca_der: CertificateDer<'static>,
-    issuer: Certificate,
-    issuer_key: KeyPair,
-    cache: Mutex<HashMap<String, Arc<CertifiedKey>>>,
+    /// rcgen 0.14 Issuer: DN + key-identifier + key usages + signing key.
+    issuer: Issuer<'static, KeyPair>,
+    /// Bounded LRU of minted leaves (audit M3): a scanner hitting random
+    /// subdomains must not grow this without limit. Order = Vec of hosts,
+    /// least-recently-used first; capacity MAX_LEAF_CACHE.
+    cache: Mutex<LeafCache>,
 }
 
 impl CaManager {
@@ -46,43 +56,39 @@ impl CaManager {
         let cert_path = dir.join(CA_CERT_FILE);
         let key_path = dir.join(CA_KEY_FILE);
 
-        let (ca_der, issuer, issuer_key) =
-            match (read_pem_file(&cert_path), read_pem_file(&key_path)) {
-                (Some(cert_pem), Some(key_pem)) => {
-                    let der = pem_to_der(&cert_pem)?;
-                    let params = CertificateParams::from_ca_cert_der(&der)
-                        .map_err(|e| AetherError::tls(format!("parse CA cert: {e}")))?;
-                    let key = KeyPair::from_pkcs8_pem_and_sign_algo(&key_pem, KEY_ALG)
-                        .map_err(|e| AetherError::tls(format!("parse CA key: {e}")))?;
-                    // The "issuer" certificate object is only metadata for leaf
-                    // encoding (issuer DN, AKI); the chain we serve uses `der`.
-                    let issuer = params
-                        .self_signed(&key)
-                        .map_err(|e| AetherError::tls(format!("rebuild issuer: {e}")))?;
-                    (der, issuer, key)
-                }
-                (None, None) => Self::generate_and_persist(&cert_path, &key_path)?,
-                _ => {
-                    return Err(AetherError::storage(format!(
-                        "incomplete CA in {}: cert and key must exist together",
-                        dir.display()
-                    )));
-                }
-            };
+        let (ca_der, issuer) = match (read_pem_file(&cert_path), read_pem_file(&key_path)) {
+            (Some(cert_pem), Some(key_pem)) => {
+                let der = pem_to_der(&cert_pem)?;
+                let key = KeyPair::from_pkcs8_pem_and_sign_algo(&key_pem, KEY_ALG)
+                    .map_err(|e| AetherError::tls(format!("parse CA key: {e}")))?;
+                // rcgen 0.14: the issuer is rebuilt straight from the
+                // persisted certificate (DN / AKI / key usages) — the
+                // chain we serve still uses `der`.
+                let issuer = Issuer::from_ca_cert_der(&der, key)
+                    .map_err(|e| AetherError::tls(format!("rebuild issuer: {e}")))?;
+                (der, issuer)
+            }
+            (None, None) => Self::generate_and_persist(&cert_path, &key_path)?,
+            _ => {
+                return Err(AetherError::storage(format!(
+                    "incomplete CA in {}: cert and key must exist together",
+                    dir.display()
+                )));
+            }
+        };
 
         Ok(Self {
             dir,
             ca_der,
             issuer,
-            issuer_key,
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new((HashMap::new(), Vec::new())),
         })
     }
 
     fn generate_and_persist(
         cert_path: &std::path::Path,
         key_path: &std::path::Path,
-    ) -> AetherResult<(CertificateDer<'static>, Certificate, KeyPair)> {
+    ) -> AetherResult<(CertificateDer<'static>, Issuer<'static, KeyPair>)> {
         let now = OffsetDateTime::now_utc();
         let mut params = CertificateParams::default();
         params
@@ -102,6 +108,8 @@ impl CaManager {
 
         let key =
             KeyPair::generate().map_err(|e| AetherError::tls(format!("generate CA key: {e}")))?;
+        // rcgen 0.14: CertifiedIssuer bundles the self-signed certificate
+        // with its Issuer (DN + key-identifier + usages) in one step.
         let cert = params
             .self_signed(&key)
             .map_err(|e| AetherError::tls(format!("self-sign CA: {e}")))?;
@@ -109,7 +117,11 @@ impl CaManager {
         write_private_file(cert_path, cert.pem().into_bytes())?;
         write_private_file(key_path, key.serialize_pem().into_bytes())?;
         tracing::info!(ca = %cert_path.display(), "generated new proxy CA");
-        Ok((cert.der().clone(), cert, key))
+        let ca_der = cert.der().clone();
+        // Same rebuild path as the load branch — one issuer shape everywhere.
+        let issuer = Issuer::from_ca_cert_der(&ca_der, key)
+            .map_err(|e| AetherError::tls(format!("build issuer: {e}")))?;
+        Ok((ca_der, issuer))
     }
 
     /// DER of the root CA (what users install into their trust store).
@@ -138,8 +150,17 @@ impl CaManager {
         if host.is_empty() {
             return Err(AetherError::tls("empty host for leaf certificate"));
         }
-        if let Some(hit) = self.cache.lock().expect("ca cache").get(&host) {
-            return Ok(hit.clone());
+        {
+            let mut guard = self.cache.lock().expect("ca cache");
+            let (map, order) = &mut *guard;
+            if let Some(hit) = map.get(&host) {
+                // refresh recency
+                if let Some(pos) = order.iter().position(|h| h == &host) {
+                    let h = order.remove(pos);
+                    order.push(h);
+                }
+                return Ok(hit.clone());
+            }
         }
 
         let now = OffsetDateTime::now_utc();
@@ -158,7 +179,7 @@ impl CaManager {
         let leaf_key =
             KeyPair::generate().map_err(|e| AetherError::tls(format!("generate leaf key: {e}")))?;
         let leaf = params
-            .signed_by(&leaf_key, &self.issuer, &self.issuer_key)
+            .signed_by(&leaf_key, &self.issuer)
             .map_err(|e| AetherError::tls(format!("sign leaf for {host}: {e}")))?;
 
         let key_der = PrivatePkcs8KeyDer::from(leaf_key.serialize_der());
@@ -169,10 +190,24 @@ impl CaManager {
             key: signing_key,
             ocsp: None,
         });
-        self.cache
-            .lock()
-            .expect("ca cache")
-            .insert(host, certified.clone());
+        {
+            let mut guard = self.cache.lock().expect("ca cache");
+            let (map, order) = &mut *guard;
+            if map.len() >= MAX_LEAF_CACHE {
+                // evict least-recently-used until we are under the cap
+                while map.len() >= MAX_LEAF_CACHE {
+                    let Some(lru) = order.first().cloned() else {
+                        break;
+                    };
+                    order.remove(0);
+                    map.remove(&lru);
+                }
+            }
+            if !map.contains_key(&host) {
+                order.push(host.clone());
+            }
+            map.insert(host, certified.clone());
+        }
         Ok(certified)
     }
 }
@@ -184,13 +219,13 @@ fn read_pem_file(path: &std::path::Path) -> Option<String> {
 }
 
 fn pem_to_der(pem: &str) -> AetherResult<CertificateDer<'static>> {
-    let mut reader = std::io::BufReader::new(pem.as_bytes());
-    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<_, _>>()
-        .map_err(|e| AetherError::tls(format!("decode PEM cert: {e}")))?;
-    certs
-        .into_iter()
+    // rustls-pemfile is unmaintained (RUSTSEC-2026-xxxx, found by the ADR-018
+    // security-audit gate); its successor is the `pem` module in
+    // rustls-pki-types itself — same bytes, no extra dependency.
+    CertificateDer::pem_slice_iter(pem.as_bytes())
         .next()
+        .transpose()
+        .map_err(|e| AetherError::tls(format!("decode PEM cert: {e}")))?
         .ok_or_else(|| AetherError::tls("no certificate found in PEM"))
 }
 
@@ -208,15 +243,20 @@ fn der_to_pem(der: &[u8]) -> String {
 
 fn write_private_file(path: &std::path::Path, bytes: Vec<u8>) -> AetherResult<()> {
     use std::io::Write;
-    let mut f = std::fs::File::create(path)
+    // Open with 0600 from the start (audit LOW: TOCTOU — the old
+    // create-then-chmod window exposed the key to concurrent readers).
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts
+        .open(path)
         .map_err(|e| AetherError::storage(format!("create {}: {e}", path.display())))?;
     f.write_all(&bytes)
         .map_err(|e| AetherError::storage(format!("write {}: {e}", path.display())))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
     Ok(())
 }
 

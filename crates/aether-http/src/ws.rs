@@ -348,7 +348,13 @@ where
             }
         };
         // forward untouched FIRST — inspection must never delay or alter traffic
-        if output.write_all(&frame.bytes).await.is_err() {
+        // flush() is load-bearing here: write_all only guarantees the bytes
+        // reached the writer's *internal* buffer (e.g. rustls' encrypted
+        // queue). Under TCP backpressure (a peer that is busy sending while
+        // we are writing) the tail would otherwise sit there unflushed while
+        // this loop blocks on the next read — the stream freezes until the
+        // next client-bound frame, which may never come.
+        if output.write_all(&frame.bytes).await.is_err() || output.flush().await.is_err() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "ws relay sink closed",
@@ -493,6 +499,71 @@ mod tests {
         assert_eq!(enc(b"foob"), "Zm9vYg==");
         assert_eq!(enc(b"fooba"), "Zm9vYmE=");
         assert_eq!(enc(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[tokio::test]
+    async fn relay_leg_flushes_after_every_forwarded_frame() {
+        use std::pin::Pin;
+        use std::task::{Context, Poll};
+
+        /// Writer with internal buffering, mirroring tokio-rustls: poll_write
+        /// accepts every byte (Ready) without promising it reached the wire.
+        struct FlushSpy {
+            writes: usize,
+            last_op_was_flush: bool,
+        }
+
+        impl tokio::io::AsyncWrite for FlushSpy {
+            fn poll_write(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                self.writes += 1;
+                self.last_op_was_flush = false;
+                Poll::Ready(Ok(buf.len()))
+            }
+
+            fn poll_flush(
+                mut self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                self.last_op_was_flush = true;
+                Poll::Ready(Ok(()))
+            }
+
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        // Regression: without an explicit flush() after write_all, a relay
+        // writer with an internal queue (tokio-rustls' encrypted buffer)
+        // keeps the tail of a backpressured write off the wire while the
+        // loop blocks on the next read — the stream freezes until the next
+        // client-bound frame, which may never come. This is exactly how the
+        // megabyte WS echo in v02_e2e used to hang ~50% of runs (flush was
+        // missing; fixed in relay_leg).
+        let bus = EventBus::new(8);
+        let rec = WsRecorder::new(1, bus);
+        let mut spy = FlushSpy {
+            writes: 0,
+            last_op_was_flush: false,
+        };
+        let wire = frame(true, 0x1, b"hello");
+        let mut input = wire.as_slice();
+        relay_leg(&mut input, &mut spy, WsDirection::ToServer, &rec)
+            .await
+            .unwrap(); // EOF after the frame -> clean return
+        assert_eq!(spy.writes, 1);
+        assert!(
+            spy.last_op_was_flush,
+            "relay_leg must flush() after every forwarded frame — writers with \
+             internal buffers keep unsent bytes otherwise (backpressure freeze)"
+        );
     }
 
     #[tokio::test]

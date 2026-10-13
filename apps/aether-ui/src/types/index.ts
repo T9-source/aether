@@ -15,7 +15,9 @@ export type Normalize<T> = T extends bigint
 
 import type { AetherEvent as RawAetherEvent } from "./AetherEvent";
 import type { Body as RawBody } from "./Body";
+import type { EventCategory as RawEventCategory } from "./EventCategory";
 import type { Flow as RawFlow } from "./Flow";
+import type { Framing as RawFraming } from "./Framing";
 import type { FlowMeta as RawFlowMeta } from "./FlowMeta";
 import type { FlowPage as RawFlowPage } from "./FlowPage";
 import type { FlowSummary as RawFlowSummary } from "./FlowSummary";
@@ -40,6 +42,8 @@ import type { WsKind as RawWsKind } from "./WsKind";
 import type { WsDirection as RawWsDirection } from "./WsDirection";
 
 export type AetherEvent = Normalize<RawAetherEvent>;
+export type EventCategory = Normalize<RawEventCategory>;
+export type Framing = Normalize<RawFraming>;
 export type Body = Normalize<RawBody>;
 export type Flow = Normalize<RawFlow>;
 export type FlowMeta = Normalize<RawFlowMeta>;

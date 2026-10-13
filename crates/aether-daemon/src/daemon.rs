@@ -4,6 +4,10 @@
 //! The daemon is the only state owner (ADR-001): proxy listener, control
 //! plane, CA, rules, storage all live here; every client (CLI, GUI, CI) is
 //! a remote consumer over the WebSocket control plane.
+//!
+//! Layering (ADR-016): `daemon::run` is **composition only** — it builds
+//! the [`crate::services::Services`] behavior layer and hands it to the
+//! protocol-only control plane. Lifecycle here, behavior in services.
 
 use crate::config::{AetherConfig, default_data_dir};
 use crate::rules::RulesStore;
@@ -36,6 +40,8 @@ pub struct DaemonInfo {
     pub ca_pem_path: PathBuf,
     pub storage_mode: String,
     pub rules_loaded: usize,
+    /// Configured plugins (loaded + disabled + failed) — V0.3 (ADR-020).
+    pub plugins_loaded: usize,
 }
 
 pub struct DaemonOptions {
@@ -52,6 +58,13 @@ pub async fn run(opts: DaemonOptions) -> AetherResult<DaemonInfo> {
     let data_dir = opts.data_dir.unwrap_or_else(default_data_dir);
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| AetherError::storage(format!("create data dir: {e}")))?;
+    // The data dir holds captured traffic (cookies, credentials, bodies)
+    // plus the daemon's own secrets — owner-only, like ~/.ssh (audit M1).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700));
+    }
 
     // ── storage ─────────────────────────────────────────────────────────
     let (storage, storage_mode): (Arc<dyn Storage>, String) =
@@ -74,6 +87,20 @@ pub async fn run(opts: DaemonOptions) -> AetherResult<DaemonInfo> {
     let rules = Arc::new(RulesStore::load(&data_dir)?);
     let registry = Arc::new(HookRegistry::new());
     let rules_loaded = rules.register_into(&registry)?;
+
+    // ── wasm plugins (V0.3, ADR-019/020) ───────────────────────────────
+    // Registered AFTER the built-ins (stable priority-0 order → core
+    // guarantees run first). Fail-closed: an enabled plugin that fails to
+    // load aborts startup here, before any listener binds.
+    let plugins = Arc::new(aether_plugins::PluginRegistry::load(
+        &opts.config.plugins,
+        &registry,
+    )?);
+    let plugins_loaded = plugins.list().len();
+    if plugins_loaded > 0 {
+        tracing::info!("loaded {plugins_loaded} wasm plugin(s)");
+    }
+
     let bus = EventBus::new(4096);
     let pipeline = Pipeline::new((*registry).clone(), bus.clone());
 
@@ -126,15 +153,22 @@ pub async fn run(opts: DaemonOptions) -> AetherResult<DaemonInfo> {
     let control_addr = control_listener
         .local_addr()
         .map_err(|e| AetherError::config(e.to_string()))?;
+    // ── services (ADR-016): the daemon composes, services behave ───────
+    let services = Arc::new(crate::services::Services {
+        traffic: crate::services::TrafficService::new(storage.clone()),
+        intercept: crate::services::InterceptService::new(intercept.clone(), bus.clone()),
+        rules: crate::services::RulesService::new(rules.clone(), registry.clone()),
+        replay: crate::services::ReplayService::new(
+            storage.clone(),
+            bus.clone(),
+            opts.config.upstream_cfg(),
+        ),
+        ca: crate::services::CaService::new(ca.clone()),
+    });
     let shared = Arc::new(crate::control::ControlShared {
         token: token.clone(),
-        bus,
-        storage,
-        intercept,
-        rules,
-        registry: registry.clone(),
-        ca: ca.clone(),
-        upstream: opts.config.upstream_cfg(),
+        services,
+        bus: bus.clone(),
         proxy_addr: proxy_addr.to_string(),
         version: VERSION,
         started_at_unix_ms: aether_core::model::unix_millis_now(),
@@ -160,27 +194,32 @@ pub async fn run(opts: DaemonOptions) -> AetherResult<DaemonInfo> {
         ca_pem_path: ca.dir().join("ca.cert.pem"),
         storage_mode,
         rules_loaded,
+        plugins_loaded,
     })
 }
 
 fn generate_token() -> AetherResult<String> {
     let mut bytes = [0u8; 32];
-    getrandom::getrandom(&mut bytes)
-        .map_err(|e| AetherError::storage(format!("token entropy: {e}")))?;
+    getrandom::fill(&mut bytes).map_err(|e| AetherError::storage(format!("token entropy: {e}")))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn write_private_file(path: &PathBuf, bytes: Vec<u8>) -> AetherResult<()> {
     use std::io::Write;
-    let mut f = std::fs::File::create(path)
+    // Open with 0600 from the start (audit LOW: TOCTOU — the old
+    // create-then-chmod window exposed the secret to concurrent readers).
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts
+        .open(path)
         .map_err(|e| AetherError::storage(format!("create {path:?}: {e}")))?;
     f.write_all(&bytes)
         .map_err(|e| AetherError::storage(format!("write {path:?}: {e}")))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
     Ok(())
 }
 

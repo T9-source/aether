@@ -9,24 +9,30 @@ import { RulesPanel } from "./components/RulesPanel";
 import { StatusBar } from "./components/StatusBar";
 import { useDaemon } from "./hooks/useDaemon";
 import { ControlClient } from "./lib/ws";
+import { initialConn as resolveConn, scrubCredentials, type ConnInit } from "./lib/conn";
 import type { Request } from "./types";
 
 type View = "history" | "intercept" | "replay" | "rules";
 
-const LS_URL = "aether.console.url";
-const LS_TOKEN = "aether.console.token";
+// Audit LOW: the daemon auth value moves to sessionStorage — it no longer
+// survives the browser session (a shared machine, an XSS, a sync extension).
+// The URL may stay in localStorage (it is not a secret); any saved auth from
+// the localStorage era is honored once, then rewritten into sessionStorage.
+const connStore = {
+  getUrl: () => sessionStorage.getItem("aether.console.url") ?? localStorage.getItem("aether.console.url"),
+  getAuth: () =>
+    sessionStorage.getItem("aether.console.auth") ??
+    localStorage.getItem("aether.console.auth") ??
+    localStorage.getItem("aether.console.token"),
+};
 
-function initialConn(): { url: string; token: string; auto: boolean } {
-  const q = new URLSearchParams(window.location.search);
-  const url = q.get("ws") ?? localStorage.getItem(LS_URL) ?? "ws://127.0.0.1:9099";
-  const token = q.get("token") ?? localStorage.getItem(LS_TOKEN) ?? "";
-  return { url, token, auto: q.get("ws") !== null && q.get("token") !== null };
+function resolveInitialConn(): ConnInit {
+  return resolveConn(window.location.search, connStore);
 }
 
 export default function App() {
-  const init = useRef(initialConn()).current;
+  const init = useRef(resolveInitialConn()).current;
   const [client, setClient] = useState<ControlClient | null>(null);
-  const [token] = useState(init.token);
   const [busy, setBusy] = useState(false);
   const [connError, setConnError] = useState<string | null>(null);
 
@@ -45,8 +51,11 @@ export default function App() {
       setClient(c); // wire up status/events immediately (useDaemon watches it)
       c.connect()
         .then(() => {
-          localStorage.setItem(LS_URL, u);
-          localStorage.setItem(LS_TOKEN, t);
+          sessionStorage.setItem("aether.console.url", u);
+          sessionStorage.setItem("aether.console.auth", t);
+          // wipe any pre-migration secret left in localStorage
+          localStorage.removeItem("aether.console.auth");
+          localStorage.removeItem("aether.console.token");
           setBusy(false);
         })
         .catch((e) => {
@@ -58,9 +67,13 @@ export default function App() {
     [],
   );
 
-  // autoconnect when both params are present (automation / demo mode)
+  // one-click reconnect: deep link or a previously saved session
   useEffect(() => {
-    if (init.auto && init.token !== "") doConnect(init.url, init.token);
+    if (init.auto) {
+      const cleaned = scrubCredentials(window.location.search);
+      window.history.replaceState(null, "", window.location.pathname + cleaned);
+      doConnect(init.url, init.auth);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -74,9 +87,10 @@ export default function App() {
     return (
       <Connect
         initialUrl={init.url}
-        initialToken={token}
+        initialAuth={init.auth}
         busy={busy}
         error={connError}
+        autoNote={init.auto ? "Reconnecting to the daemon from your last session…" : null}
         onConnect={doConnect}
       />
     );

@@ -1,0 +1,23 @@
+# hello — the stamp plugin (spike example, ADR-019).
+# Stamps `x-aether-hello: from-wasm` on requests. Deliberately stateless:
+# pooled instances share memory across rotations, so anything kept in wasm
+# memory is undefined behavior for a hook host (ADR-019 §statelessness).
+# Standalone crate — built only by scripts/build-spike-plugins.sh for
+# wasm32-wasip1; not a workspace member on purpose.
+
+[package]
+name = "aether-plugin-example-hello"
+version = "0.3.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+extism-pdk = "1.4.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace]

@@ -46,7 +46,7 @@ impl ControlClient {
     async fn send_raw(&mut self, req: ControlRequest) -> AetherResult<Value> {
         let text = serde_json::to_string(&req).map_err(|e| AetherError::protocol(e.to_string()))?;
         self.ws
-            .send(Message::Text(text))
+            .send(Message::Text(text.into()))
             .await
             .map_err(|e| AetherError::network(format!("control send: {e}")))?;
         loop {
@@ -57,7 +57,8 @@ impl ControlClient {
                 .ok_or_else(|| AetherError::network("control plane closed"))?
                 .map_err(|e| AetherError::network(format!("control recv: {e}")))?;
             let Message::Text(text) = msg else { continue };
-            let value: Value = serde_json::from_str(&text)
+            let text = text.as_str();
+            let value: Value = serde_json::from_str(text)
                 .map_err(|e| AetherError::protocol(format!("bad control frame: {e}")))?;
             match value.get("type").and_then(Value::as_str) {
                 Some("event") => {

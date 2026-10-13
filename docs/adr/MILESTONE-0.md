@@ -40,7 +40,7 @@ This milestone proves we have a **real product**, not an architecture diagram.
   `docs/PHASE-1.md` + `docs/LIMITATIONS.md` — the honest known-limits list).
 - Demo script: ✅ `scripts/demo.sh` — the reproducible birth moment minus
   secrets (CA install, headless daemon, TLS MITM round-trip, CLI intercept,
-  history search); `docs/guide-ar.md` remains the narrated walkthrough.
+  history search).
 - ADR-008 **Accepted** (2026-10-08, founder decision) — ecosystem work
   unblocked.
 

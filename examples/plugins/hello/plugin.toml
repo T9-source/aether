@@ -1,0 +1,6 @@
+name = "hello"
+version = "0.3.0"
+wasm = "plugin.wasm"
+timeout_ms = 1000
+max_pages = 256
+capabilities = ["modify_traffic"]

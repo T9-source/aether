@@ -1,0 +1,10 @@
+target
+# Only the curated seed corpus (`corpus/<target>/seeds/`) is tracked; inputs
+# evolved by libFuzzer sessions stay local — seeds must be reviewable bytes.
+corpus/**
+!corpus/*/
+!corpus/*/seeds/
+!corpus/*/seeds/**
+artifacts
+coverage
+Cargo.lock

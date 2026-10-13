@@ -13,12 +13,19 @@
 //!
 //! ## Dependency discipline (hard invariant)
 //!
-//! This crate may only depend on runtime/serialization/computation plumbing
-//! (`serde`, `tokio`, `async-trait`, `thiserror`, `base64`, `ts-rs`, `regex`).
+//! **This crate has zero infrastructure/protocol dependencies (ADR-014).**
 //! It must **never** know about TLS, SQLite, WebSocket, Tauri, React — or any
-//! HTTP wire codec. `tokio` here is the async runtime and timeout budget only;
-//! `regex` is pure computation for the serialized rule layer. Zero protocol
-//! knowledge lives in this crate.
+//! HTTP wire codec. What it may use falls into exactly three buckets:
+//!
+//! 1. *Serialization & type-sharing* — `serde`, `serde_json`, `ts-rs`.
+//! 2. *Ergonomics* — `thiserror` (errors), `async-trait` (trait futures).
+//! 3. *Computation* — `regex` (serialized rule layer), `base64` (binary
+//!    body encoding), and `tokio` **primitives only** (`sync` + `time`:
+//!    the broadcast bus and the hook timeout budget — no runtime, no net,
+//!    no fs; a test-only runtime lives in `[dev-dependencies]`).
+//!
+//! If a feature seems to need more than these three buckets, it belongs in
+//! another crate — that is the invariant working as intended.
 
 pub mod context;
 pub mod error;
@@ -32,11 +39,12 @@ pub mod storage;
 pub use context::{Capabilities, RequestContext, Scope, TrafficSource};
 pub use error::{AetherError, AetherResult};
 pub use events::{
-    AetherEvent, EventBus, EventSubscription, HookStage, InterceptDecision, InterceptDirection,
+    AetherEvent, EventBus, EventCategory, EventSubscription, HookStage, InterceptDecision,
+    InterceptDirection,
 };
 pub use hooks::{Hook, HookAction, HookRegistry, HookResult};
 pub use model::{
-    Body, Flow, FlowId, FlowMeta, Header, Headers, HttpVersion, Method, Request, Response,
+    Body, Flow, FlowId, FlowMeta, Framing, Header, Headers, HttpVersion, Method, Request, Response,
     StatusCode, TransportProto, Url, WsDirection, WsKind, WsMessage, WsSession,
 };
 pub use pipeline::{Pipeline, PipelineVerdict};

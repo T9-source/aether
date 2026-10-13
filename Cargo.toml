@@ -5,11 +5,12 @@ members = [
     "crates/aether-http",
     "crates/aether-store-sqlite",
     "crates/aether-daemon",
+    "crates/aether-plugins",
     "apps/aether-cli",
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.85"
@@ -22,34 +23,37 @@ serde_json = "1"
 thiserror = "2"
 async-trait = "0.1"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util", "signal", "fs"] }
-base64 = "0.22"
-ts-rs = { version = "10", features = ["serde-json-impl", "serde-compat"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util", "io-std", "signal", "fs"] }
+base64 = "0.23"
+ts-rs = { version = "12", features = ["serde-json-impl", "serde-compat"] }
 clap = { version = "4", features = ["derive"] }
 regex = "1"
-toml = "0.8"
+toml = "1.1"
 # --- network stack (ADR-009): rustls + rcgen, hand-rolled h1 codec (wire truth) ---
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-rustls-pki-types = "1"
-rustls-pemfile = "2"
+rustls-pki-types = "1.12"
 webpki-roots = "0.26"
-rcgen = { version = "0.13", default-features = false, features = ["pem", "ring", "x509-parser"] }
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "x509-parser"] }
 time = "0.3"
 # --- control plane (ADR-002): WebSocket + JSON ---
-tokio-tungstenite = "0.24"
+tokio-tungstenite = "0.30"
 # --- HTTP/2 (V0.2, ADR-013): the h2 crate for connection/stream machinery
 # (HPACK, flow control, frames); wire truth lives in our model layer
 h2 = "0.4"
 http = "1"
 bytes = "1"
 # --- storage (ADR-005): SQLite via sqlx, runtime API (no macros) ---
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
 dirs = "5"
-getrandom = "0.2"
+getrandom = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3"
+# --- WASM plugin host (V0.3, ADR-019): Extism over wasmtime ---
+extism = "1.41"
+sha2 = "0.10"
+hex = "0.4"
 
 [profile.release]
 lto = "thin"

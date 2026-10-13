@@ -1,12 +1,13 @@
-# Aether daemon configuration — see docs/adr/ (all Accepted).
+# Aether daemon configuration --- see docs/adr/ (all Accepted).
 # Place at ~/.aether/aether.toml or pass --config.
+# Unknown keys inside a section are rejected at startup (typos fail loudly).
 
 [proxy]
 listen = "127.0.0.1:8888"
 
 [control]
 listen = "127.0.0.1:9099"
-# token = "fixed-token-for-scripts"   # generated per-run when absent
+# the control-plane secret is generated per-run when absent
 
 [storage]
 backend = "sqlite"                    # "sqlite" | "memory"
@@ -16,17 +17,37 @@ backend = "sqlite"                    # "sqlite" | "memory"
 request = false
 response = false
 
+# --- top-level engine settings -------------------------------------------
+# These live OUTSIDE the sections above (putting them under [intercept]
+# is rejected -- silent no-ops are a security hazard).
+
 # Certificate-pinned / sensitive domains: tunneled blindly, never recorded (ADR-004)
 passthrough = []
 
 # V0.2 (ADR-013): offer HTTP/2 on the upstream leg (default true).
-# Turn off to force h1 upstream — handy for origins that misbehave behind
+# Turn off to force h1 upstream -- handy for origins that misbehave behind
 # h2 proxies. WebSocket upgrades always dial h1 (an upgrade is an h1 mechanism).
 upstream_alpn_h2 = true
 
-# Lab-only knobs (ADR-011)
+# Validate upstream certificates (turn off only for labs --- ADR-011).
 upstream_tls_verify = true
+
+# Per-body capture limit in bytes (ADR-011).
 capture_max_body = 8388608            # 8 MiB per body
 
 [host_overrides]
 # "mock.local" = "socket://127.0.0.1:8443"
+
+# --- WASM plugins (V0.3, ADR-019/020) --------------------------------------
+# One [[plugins]] entry per plugin directory (containing plugin.toml and
+# plugin.wasm). Relative paths resolve against THIS file's directory.
+# Enabled plugins load at startup; if one of them fails to load, the daemon
+# refuses to start (fail-closed). Pin the artifact to make any swap loud:
+#
+# [[plugins]]
+# path = "plugins/hello"
+# enabled = true
+#
+# # optional, from `sha256sum plugin.wasm`:
+# sha256 = " paste the 64 lowercase hex chars here "
+

@@ -24,9 +24,16 @@ pub struct SqliteStore {
     next_id: AtomicU64,
 }
 
-const FLOW_COLUMNS: &str = "id, created_at, completed, dropped, method, scheme, host, port, \
-     path, query, status, request_bytes, response_bytes, duration_ms, \
-     client_proto, server_proto, tags_json, request_json, response_json, tls_json, ws_json";
+/// Column list reused by every flow SELECT; compile-time literals only, so
+/// \`concat!\` can fold them into static SQL (sqlx 0.9 injection audit).
+macro_rules! flow_columns {
+    () => {
+        "id, created_at, completed, dropped, method, scheme, host, port, \
+         path, query, status, request_bytes, response_bytes, duration_ms, \
+         client_proto, server_proto, tags_json, request_json, response_json, \
+         tls_json, ws_json, wire_facts_json"
+    };
+}
 
 impl SqliteStore {
     /// Opens (creating if needed) a store at `path`. `:memory:` uses a
@@ -51,6 +58,26 @@ impl SqliteStore {
             .connect_with(opts)
             .await
             .map_err(|e| AetherError::storage(format!("open sqlite {path:?}: {e}")))?;
+
+        // Captured traffic is secrets: the DB file must never be world/group
+        // readable (audit M1). Created eagerly here (sqlx opens lazily, so a
+        // post-connect chmod races); WAL/SHM siblings inherit the directory's
+        // 0700 from the daemon.
+        if !is_memory {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(path)
+                    .map_err(|e| AetherError::storage(format!("create {path:?} 0600: {e}")))?;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                    .map_err(|e| AetherError::storage(format!("tighten perms on {path:?}: {e}")))?;
+            }
+        }
 
         let mut store = Self {
             pool,
@@ -97,7 +124,8 @@ impl SqliteStore {
                 request_json    TEXT,
                 response_json   TEXT,
                 tls_json        TEXT,
-                ws_json         TEXT
+                ws_json         TEXT,
+                wire_facts_json TEXT
             )"#,
         )
         .execute(&self.pool)
@@ -125,6 +153,20 @@ impl SqliteStore {
                 .await
                 .map_err(db)?;
             tracing::info!("migrated flows table: added ws_json (V0.2)");
+        }
+        // V0.2.x (ADR-015): observed/forwarded wire facts — one JSON column.
+        let has_wf: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('flows') WHERE name = 'wire_facts_json'",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(db)?;
+        if has_wf == 0 {
+            sqlx::query("ALTER TABLE flows ADD COLUMN wire_facts_json TEXT")
+                .execute(&self.pool)
+                .await
+                .map_err(db)?;
+            tracing::info!("migrated flows table: added wire_facts_json (ADR-015)");
         }
         Ok(())
     }
@@ -232,6 +274,14 @@ fn flow_to_row(flow: &Flow) -> AetherResult<RowValues> {
             .map(serde_json::to_string)
             .transpose()
             .map_err(serde_err)?,
+        wire_facts_json: {
+            let wf = aether_core::model::WireFacts::from_meta(&flow.meta);
+            if wf.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_string(&wf).map_err(serde_err)?)
+            }
+        },
     })
 }
 
@@ -258,6 +308,7 @@ struct RowValues {
     response_json: Option<String>,
     tls_json: Option<String>,
     ws_json: Option<String>,
+    wire_facts_json: Option<String>,
 }
 
 fn row_to_summary(row: &SqliteRow) -> AetherResult<FlowSummary> {
@@ -317,6 +368,13 @@ fn row_to_flow(row: &SqliteRow) -> AetherResult<Flow> {
         .map(serde_json::from_str)
         .transpose()
         .map_err(serde_err)?;
+    let wire_facts: aether_core::model::WireFacts = row
+        .try_get::<Option<&str>, _>("wire_facts_json")
+        .map_err(db)?
+        .map(serde_json::from_str::<aether_core::model::WireFacts>)
+        .transpose()
+        .map_err(serde_err)?
+        .unwrap_or_default();
     let client_proto: aether_core::model::TransportProto =
         serde_json::from_str(row.try_get::<&str, _>("client_proto").map_err(db)?)
             .map_err(serde_err)?;
@@ -339,6 +397,12 @@ fn row_to_flow(row: &SqliteRow) -> AetherResult<Flow> {
             server_proto,
             tls,
             tags,
+            // Wire facts (ADR-015): one JSON sidecar column; rows written
+            // before the column existed deserialize as all-None facts.
+            observed_req_framing: wire_facts.observed_req,
+            forwarded_req_framing: wire_facts.forwarded_req,
+            observed_res_framing: wire_facts.observed_res,
+            forwarded_res_framing: wire_facts.forwarded_res,
         },
     })
 }
@@ -355,8 +419,8 @@ impl Storage for SqliteStore {
             r#"INSERT INTO flows
                (id, created_at, completed, dropped, method, scheme, host, port, path, query,
                 status, request_bytes, response_bytes, duration_ms, client_proto, server_proto,
-                tags_json, request_json, response_json, tls_json, ws_json)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
+                tags_json, request_json, response_json, tls_json, ws_json, wire_facts_json)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
                ON CONFLICT(id) DO UPDATE SET
                  created_at=excluded.created_at, completed=excluded.completed,
                  dropped=excluded.dropped, method=excluded.method, scheme=excluded.scheme,
@@ -366,7 +430,7 @@ impl Storage for SqliteStore {
                  client_proto=excluded.client_proto, server_proto=excluded.server_proto,
                  tags_json=excluded.tags_json, request_json=excluded.request_json,
                  response_json=excluded.response_json, tls_json=excluded.tls_json,
-                 ws_json=excluded.ws_json"#,
+                 ws_json=excluded.ws_json, wire_facts_json=excluded.wire_facts_json"#,
         )
         .bind(v.id)
         .bind(v.created_at)
@@ -389,6 +453,7 @@ impl Storage for SqliteStore {
         .bind(&v.response_json)
         .bind(&v.tls_json)
         .bind(&v.ws_json)
+        .bind(&v.wire_facts_json)
         .execute(&self.pool)
         .await
         .map_err(db)?;
@@ -410,8 +475,8 @@ impl Storage for SqliteStore {
                 r#"INSERT INTO flows
                    (id, created_at, completed, dropped, method, scheme, host, port, path, query,
                     status, request_bytes, response_bytes, duration_ms, client_proto, server_proto,
-                    tags_json, request_json, response_json, tls_json, ws_json)
-                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
+                    tags_json, request_json, response_json, tls_json, ws_json, wire_facts_json)
+                   VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
                    ON CONFLICT(id) DO UPDATE SET
                      created_at=excluded.created_at, completed=excluded.completed,
                      dropped=excluded.dropped, method=excluded.method, scheme=excluded.scheme,
@@ -421,7 +486,7 @@ impl Storage for SqliteStore {
                      client_proto=excluded.client_proto, server_proto=excluded.server_proto,
                      tags_json=excluded.tags_json, request_json=excluded.request_json,
                      response_json=excluded.response_json, tls_json=excluded.tls_json,
-                     ws_json=excluded.ws_json"#,
+                     ws_json=excluded.ws_json, wire_facts_json=excluded.wire_facts_json"#,
             )
             .bind(v.id)
             .bind(v.created_at)
@@ -444,6 +509,7 @@ impl Storage for SqliteStore {
             .bind(&v.response_json)
             .bind(&v.tls_json)
             .bind(&v.ws_json)
+            .bind(&v.wire_facts_json)
             .execute(&mut *tx)
             .await
             .map_err(db)?;
@@ -467,7 +533,8 @@ impl Storage for SqliteStore {
     }
 
     async fn get_flow(&self, id: FlowId) -> AetherResult<Option<Flow>> {
-        let row = sqlx::query(&format!("SELECT {FLOW_COLUMNS} FROM flows WHERE id = ?1"))
+        const GET_FLOW_SQL: &str = concat!("SELECT ", flow_columns!(), " FROM flows WHERE id = ?1");
+        let row = sqlx::query(GET_FLOW_SQL)
             .bind(id as i64)
             .fetch_optional(&self.pool)
             .await
@@ -480,8 +547,9 @@ impl Storage for SqliteStore {
 
     async fn list_flows(&self, query: FlowQuery) -> AetherResult<FlowPage> {
         let limit = query.limit();
-        let mut qb: QueryBuilder<Sqlite> =
-            QueryBuilder::new(format!("SELECT {FLOW_COLUMNS} FROM flows WHERE 1=1"));
+        // Const columns + static suffix; all dynamic parts use push_bind.
+        let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new("SELECT ");
+        qb.push(flow_columns!()).push(" FROM flows WHERE 1=1");
         if let Some(before) = query.before {
             qb.push(" AND id < ").push_bind(before as i64);
         }
@@ -568,18 +636,19 @@ impl Storage for SqliteStore {
         }
         // Fallback: metadata-only substring search (documented degradation)
         let needle = format!("%{}%", query.to_lowercase());
-        let rows = sqlx::query(
-            &format!(
-                "SELECT {FLOW_COLUMNS} FROM flows \
-                 WHERE LOWER(method || ' ' || scheme || '://' || host || ':' || port || path) LIKE ?1 \
-                 ORDER BY id DESC LIMIT ?2"
-            ),
-        )
-        .bind(needle)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(db)?;
+        const LIKE_SEARCH_SQL: &str = concat!(
+            "SELECT ",
+            flow_columns!(),
+            " FROM flows ",
+            "WHERE LOWER(method || ' ' || scheme || '://' || host || ':' || port || path) LIKE ?1 ",
+            "ORDER BY id DESC LIMIT ?2"
+        );
+        let rows = sqlx::query(LIKE_SEARCH_SQL)
+            .bind(needle)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db)?;
         rows.iter().map(row_to_summary).collect()
     }
 

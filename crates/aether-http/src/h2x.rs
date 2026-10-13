@@ -300,6 +300,7 @@ pub async fn client_exchange(
     Ok(UpstreamReply {
         response,
         remainder,
+        leg_h2: true,
     })
 }
 
@@ -311,16 +312,26 @@ pub async fn client_exchange(
 /// Each request stream runs through the **same** engine path as h1 traffic;
 /// the console, CLI, rules and intercept cannot tell the legs apart (and
 /// must not have to — ADR-006 #1).
+///
+/// Shutdown drains per ADR-018: GOAWAY first, in-flight streams finish, and
+/// a client that ignores GOAWAY is cut after [`H2_DRAIN_DEADLINE`].
+pub const H2_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub async fn serve_connection(
     engine: Arc<FlowEngine>,
     io: Box<dyn crate::server::AsyncReadWrite>,
     peer: SocketAddr,
     tls_facts: Option<TlsFacts>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut builder = h2::server::Builder::new();
     builder
         .initial_window_size(1024 * 1024)
-        .initial_connection_window_size(2 * 1024 * 1024);
+        .initial_connection_window_size(2 * 1024 * 1024)
+        // Bounded concurrency: without this the h2 server accepts unlimited
+        // concurrent streams; each spawns a task with up to 8MB capture —
+        // 1000 streams ≈ OOM (audit M2). 128 is generous for real clients.
+        .max_concurrent_streams(128);
 
     let handshake = builder.handshake::<_, Bytes>(io).await;
     let mut connection = match handshake {
@@ -331,22 +342,69 @@ pub async fn serve_connection(
         }
     };
 
-    while let Some(accepted) = connection.accept().await {
-        let (http_req, respond) = match accepted {
-            Ok(pair) => pair,
-            Err(e) => {
-                tracing::debug!(%peer, error = %e, "h2 accept stream failed");
+    loop {
+        tokio::select! {
+            accepted = connection.accept() => {
+                let Some(accepted) = accepted else { break };
+                let (http_req, respond) = match accepted {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        tracing::debug!(%peer, error = %e, "h2 accept stream failed");
+                        break;
+                    }
+                };
+                spawn_stream(&engine, &tls_facts, peer, http_req, respond);
+            }
+            _ = shutdown.changed() => {
+                // ADR-018 (graceful GOAWAY): refuse *new* streams, let
+                // in-flight streams finish. Per RFC 7540 §6.8 the CLIENT
+                // owns the close after GOAWAY — a client that never closes
+                // must not hold the daemon hostage, hence the drain
+                // deadline (nginx's worker_shutdown_timeout, same idea).
+                tracing::debug!(%peer, "h2 client leg: graceful GOAWAY (shutdown)");
+                connection.graceful_shutdown();
+                let deadline = tokio::time::sleep(H2_DRAIN_DEADLINE);
+                tokio::pin!(deadline);
+                loop {
+                    tokio::select! {
+                        _ = &mut deadline => {
+                            tracing::debug!(%peer, "h2 drain deadline elapsed — cutting connection");
+                            break;
+                        }
+                        accepted = connection.accept() => {
+                            let Some(accepted) = accepted else { break }; // connection done
+                            match accepted {
+                                Ok((http_req, respond)) => {
+                                    spawn_stream(&engine, &tls_facts, peer, http_req, respond);
+                                }
+                                Err(e) => {
+                                    tracing::debug!(%peer, error = %e, "h2 accept failed during drain");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 break;
             }
-        };
-        let engine = engine.clone();
-        let tls_facts = tls_facts.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_stream(engine, http_req, respond, peer, tls_facts).await {
-                tracing::debug!(%peer, error = %e, "h2 stream ended with error");
-            }
-        });
+        }
     }
+}
+
+fn spawn_stream(
+    engine: &Arc<FlowEngine>,
+    tls_facts: &Option<TlsFacts>,
+    peer: SocketAddr,
+    http_req: http::Request<h2::RecvStream>,
+    respond: h2::server::SendResponse<Bytes>,
+) {
+    let engine = engine.clone();
+    let tls_facts = tls_facts.clone();
+    tokio::spawn(async move {
+        if let Err(e) = handle_stream(engine, http_req, respond, peer, tls_facts).await {
+            tracing::debug!(%peer, error = %e, "h2 stream ended with error");
+        }
+    });
 }
 
 async fn handle_stream(
@@ -424,6 +482,7 @@ async fn handle_stream(
     let conn = ConnInfo {
         client_addr: peer,
         client_proto: aether_core::model::TransportProto::Tls,
+        client_h2: true,
         tls: tls_facts,
     };
 
@@ -432,10 +491,8 @@ async fn handle_stream(
             response,
             remainder,
         } => {
-            let head_request = false; // HEAD handled inside via empty body + kept CL
-            let _ = head_request;
             let http_resp = to_http_response(&response)?;
-            let is_head_like = response.status.code == 204 || response.status.code == 304;
+            let _is_head_like = response.status.code == 204 || response.status.code == 304;
             let has_cl = response.headers.contains("content-length");
             match respond.send_response(http_resp, false) {
                 Ok(mut send) => {
@@ -473,7 +530,6 @@ async fn handle_stream(
                         send.send_reset(h2::Reason::CANCEL);
                         return Ok(());
                     }
-                    let _ = is_head_like;
                     let _ = has_cl;
                     let _ = send.send_data(Bytes::new(), true);
                 }

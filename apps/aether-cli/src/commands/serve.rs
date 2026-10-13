@@ -66,8 +66,14 @@ pub async fn run(
         info.proxy_addr
     );
     println!("  control    : ws://{}", info.control_addr);
+    println!();
     println!(
-        "  token      : {} (also in {:?})",
+        "  console    : http://localhost:5173/?ws=ws://{}&auth={}",
+        info.control_addr, info.token
+    );
+    println!("             ↑ one-click link — opens the console already connected");
+    println!(
+        "  auth       : {} (also in {:?})",
         info.token,
         info.data_dir.join("token")
     );

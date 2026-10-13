@@ -1,0 +1,110 @@
+name: release
+
+# Tag-driven release build (docs/RELEASE-CHECKLIST.md section 3).
+# Pushing an annotated tag `0.2.x` builds release binaries for the four
+# target triples and attaches them to the GitHub Release for that tag.
+# Every third-party action is pinned by commit SHA — same policy as ci.yml
+# (OpenSSF Scorecard: no unpinned third-party actions).
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_cross: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross (linux musl)
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release -p aether-cli --target ${{ matrix.target }}
+          else
+            cargo build --release -p aether-cli --target ${{ matrix.target }}
+          fi
+
+      - name: Stage artifacts with sha256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p stage
+          BIN="target/${{ matrix.target }}/release/aether"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "$BIN.exe" "stage/aether-${{ matrix.target }}.exe"
+          else
+            cp "$BIN" "stage/aether-${{ matrix.target }}"
+          fi
+          # Checksum line uses the bare filename so `sha256sum -c` works
+          # from any directory the user downloads into.
+          ( cd stage && sha256sum "aether-${{ matrix.target }}$( [ "${{ matrix.os }}" = "windows-latest" ] && echo .exe )" > "aether-${{ matrix.target }}$( [ "${{ matrix.os }}" = "windows-latest" ] && echo .exe ).sha256" )
+
+      - name: Upload staged artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: aether-${{ matrix.target }}
+          path: stage/*
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download all staged artifacts
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Attach artifacts to the tag's GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -la artifacts/
+          gh release upload "$GITHUB_REF_NAME" artifacts/* --clobber \
+            --repo "$GITHUB_REPOSITORY"
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --json assets --jq '.assets[].name'

@@ -18,6 +18,11 @@ Architecture Decision Records. One decision, one file, permanent status.
 | [011](ADR-011-body-capture-policy.md) | Body capture policy + upstream TLS knobs | Accepted |
 | [012](ADR-012-console-ui-and-replay.md) | Console UI stack, desktop shell, flows_replay, live rules | Accepted |
 | [013](ADR-013-h2-and-websocket.md) | HTTP/2 legs + WebSocket inspection (V0.2) | Accepted |
+| [014](ADR-014-core-dependency-policy.md) | Core dependency policy: zero infrastructure/protocol deps | Accepted |
+| [015](ADR-015-wire-truth-model.md) | Wire truth model: Observed / Logical / Forwarded | Accepted |
+| [016](ADR-016-daemon-services.md) | Daemon decomposition: services own behavior, daemon owns lifecycle | Accepted |
+| [017](ADR-017-event-taxonomy.md) | Event taxonomy: four categories, no telemetry events | Accepted |
+| [018](ADR-018-v02-acceptance-and-stabilization-gate.md) | V0.2 acceptance criteria + stabilization gate before plugins | Accepted |
 
 ## Where each decision lives in code
 
@@ -33,9 +38,14 @@ Architecture Decision Records. One decision, one file, permanent status.
 - **ADR-009** → `crates/aether-http/src/{wire,upstream,server}.rs`
 - **ADR-011** → capture limits in `crates/aether-http/src/{wire,upstream,engine}.rs`
 - **ADR-012** → `apps/aether-ui/src/**` (console), `apps/aether-desktop/` (shell), `flows_replay` + `registry` in `crates/aether-daemon/src/control.rs`, live registry in `crates/aether-core/src/hooks.rs`, `sync_into` in `crates/aether-daemon/src/rules.rs`
+- **ADR-014** → `crates/aether-core/Cargo.toml` (minimal tokio + policy comment), `scripts/check-core-deps.sh`, `crates/aether-core/src/lib.rs`
+- **ADR-015** → `Framing`/`WireFacts` in `crates/aether-core/src/model/flow.rs`, fact recording in `crates/aether-http/src/engine.rs`, leg facts in `crates/aether-http/src/{upstream,h2x,server}.rs`, `wire_facts_json` in `crates/aether-store-sqlite/src/lib.rs`
+- **ADR-016** → `crates/aether-daemon/src/services/**`, protocol-only `control.rs`, composition-only `daemon.rs`
+- **ADR-017** → `EventCategory` + `category()` in `crates/aether-core/src/events.rs`, category on event frames in `crates/aether-daemon/src/control.rs`
+- **ADR-018** → `crates/aether-http/tests/v02_e2e.rs` (acceptance tests), `H2_DRAIN_DEADLINE` in `crates/aether-http/src/h2x.rs`, `docs/LIMITATIONS.md`
 
 ## Convention
 
-- English for ADRs and code (open-source convention), Arabic user docs where
-  they help the founder (`docs/guide-ar.md`).
+- English for ADRs, docs and code (open-source convention; the repository
+  is intentionally fully English).
 - Superseded ADRs are never edited — a new ADR replaces them.

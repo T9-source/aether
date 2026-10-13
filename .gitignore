@@ -1,5 +1,28 @@
+# --- build artifacts ---
 /target
+fuzz/target
+apps/aether-desktop/src-tauri/target
+
+# --- runtime data (daemon state, tokens, CA keys) ---
+aether-data/
 **/*.db
 **/*.db-wal
 **/*.db-shm
 aether-ca.pem
+*.key
+*.p12
+
+# --- node ---
+node_modules/
+apps/aether-ui/dist/
+
+# --- logs & local junk ---
+*.log
+.DS_Store
+Thumbs.db
+
+# --- local agent workspace (research, logs) ---
+.zwork/
+research/
+examples/plugins/*/target/
+examples/plugins/*/plugin.wasm

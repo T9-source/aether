@@ -38,14 +38,23 @@
 | `permessage-deflate` is stripped from the handshake by default | Compressed frames would be uninspectable noise in the record; stripping is the mitmproxy-proven default. Flows are tagged `ws-deflate-stripped` when it happened | Opt-in pass-through of the extension — backlog |
 | One frame > 16 MiB ends the relay | Memory-exhaustion guard (`MAX_FRAME_BYTES`), documented in ADR-013 | Configurable cap — backlog |
 | Session record is bounded (500 messages / ~1 MB previews) | ADR-011 philosophy: bounded capture. Counters keep the truth (totals always exact) | Spooling |
+| Message records above 256 KiB keep only the capped payload in the record | `MAX_RECORDED_MESSAGE_BYTES` (ADR-013): the assembler stops accumulating past the cap; totals still count true sizes, and the relay forwards every byte regardless | Spooling lifts the cap honestly |
 
 ## Operations
 
 | Limit | Why | When it lifts |
 |---|---|---|
+| h2 connections drain for up to 30s after shutdown, then are cut | ADR-018: graceful GOAWAY — in-flight streams finish, but per RFC 7540 §6.8 the *client* owns the close after GOAWAY, so a client that ignores it cannot hold the daemon hostage (`H2_DRAIN_DEADLINE`, nginx `worker_shutdown_timeout`, same idea) | Config knob if field usage demands it |
 | `aether bench proxy` / `aether soak` run an embedded lab, not the installed daemon | They measure the engine in isolation (no control-plane clients attached), which is the correct isolation for a latency/health baseline | A `--control` mode attaching to a live daemon is trivial and planned |
 | Soak measures RSS/FD of the lab process | Criterion 12 asks about the daemon's steady state; the lab runs the identical engine+storage wiring | Same as above |
 | Console UI ships as a dev build (`apps/aether-ui`); the Tauri bundle needs a desktop machine | Cross-compiling Tauri bundles for macOS/Windows is a founder-machine ritual (M0 criterion 3) | Release engineering phase |
+
+## Control plane (AUDIT-2026-10-11)
+
+| Limit | Why | When it lifts |
+|---|---|---|
+| Control-plane auth failures are not rate-limited (AUDIT F2, filed) | The token is 256-bit OS-CSPRNG, the default bind is loopback-only, and the threat is a local process — the cost/benefit favors fixing it in the control-plane hardening pass | Control-plane hardening (V0.3 window) |
+| WS *interception* (editing frames in flight) is deferred | Editing a relayed frame mid-stream needs a buffered WS pipeline; inspection is complete and honest, editing is not claimed | ADR-018 Part 1 marks it non-blocking for "shipped" |
 
 ## Things we refuse to do (by design)
 

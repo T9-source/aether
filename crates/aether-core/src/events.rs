@@ -4,6 +4,13 @@
 //! boundary and the same events the control plane will push to UI/CLI
 //! clients (ADR-002), which is why they are `Clone + Serialize` and shaped as
 //! one tagged enum.
+//!
+//! Event taxonomy (ADR-017): every event belongs to exactly one of four
+//! categories — [`EventCategory::Transport`], [`EventCategory::Pipeline`],
+//! [`EventCategory::Security`], [`EventCategory::Lifecycle`]. Low-level
+//! networking telemetry (bytes read/written, socket churn, timer ticks) is
+//! deliberately **not** here: it belongs to tracing/metrics, so the bus can
+//! never explode into millions of micro-events.
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -36,6 +43,29 @@ pub enum InterceptDirection {
 pub enum InterceptDecision {
     Forward,
     Drop,
+}
+
+/// Which slice of the system an event belongs to (ADR-017). Consumers (UI
+/// filters, plugins, automation) subscribe by category instead of matching
+/// every variant — and reviewers use it as a checklist: anything that is not
+/// security-relevant state must not become an `AetherEvent` at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum EventCategory {
+    /// Connection-level decisions: tunneling, pass-through, handshake
+    /// policy. Reserved for the coarse transport facts an operator must
+    /// see — never per-byte telemetry.
+    Transport,
+    /// The request/response pipeline: received, modified, forwarded,
+    /// hook execution, WebSocket message flow.
+    Pipeline,
+    /// Security-relevant operator/analysis outcomes: findings, intercept
+    /// holds and releases.
+    Security,
+    /// Flow lifecycle and daemon health: started, completed, dropped,
+    /// non-fatal errors.
+    Lifecycle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -124,6 +154,37 @@ pub enum AetherEvent {
     },
 }
 
+impl AetherEvent {
+    /// The taxonomy slot of this event (ADR-017). Exhaustive by construction:
+    /// adding a variant without classifying it is a compile error.
+    pub fn category(&self) -> EventCategory {
+        match self {
+            // ── transport ────────────────────────────────────────────────
+            AetherEvent::PassThrough { .. } => EventCategory::Transport,
+            // ── pipeline ───────────────────────────────────────────────
+            AetherEvent::RequestReceived { .. }
+            | AetherEvent::RequestModified { .. }
+            | AetherEvent::RequestForwarded { .. }
+            | AetherEvent::ResponseReceived { .. }
+            | AetherEvent::ResponseModified { .. }
+            | AetherEvent::ResponseForwarded { .. }
+            | AetherEvent::HookExecuted { .. }
+            | AetherEvent::WsOpened { .. }
+            | AetherEvent::WsMessage { .. }
+            | AetherEvent::WsClosed { .. } => EventCategory::Pipeline,
+            // ── security ───────────────────────────────────────────────
+            AetherEvent::FindingCreated { .. }
+            | AetherEvent::InterceptHold { .. }
+            | AetherEvent::InterceptReleased { .. } => EventCategory::Security,
+            // ── lifecycle ─────────────────────────────────────────────
+            AetherEvent::FlowStarted { .. }
+            | AetherEvent::FlowCompleted { .. }
+            | AetherEvent::FlowDropped { .. }
+            | AetherEvent::ErrorOccurred { .. } => EventCategory::Lifecycle,
+        }
+    }
+}
+
 /// Broadcast bus: any number of consumers (GUI, CLI, automation, future
 /// plugins) may subscribe; each receives every event published after its
 /// subscription. A consumer that falls behind loses *its own* copy with a
@@ -159,10 +220,40 @@ pub struct EventSubscription {
     receiver: broadcast::Receiver<AetherEvent>,
 }
 
+/// Outcome of awaiting the bus (audit M6): `Lagged` is a *recovery*
+/// signal, not a shutdown. Storage remains the source of truth — the
+/// consumer should tell its user it missed events and keep going.
+#[derive(Debug)]
+pub enum EventTick {
+    /// The next event in order.
+    Event(AetherEvent),
+    /// This subscriber fell behind by `n` events; they are gone for this
+    /// subscriber only. Continue consuming from here on.
+    Lagged(u64),
+    /// The bus is closed (daemon shutting down).
+    Closed,
+}
+
 impl EventSubscription {
-    /// Next event, or `None` when the bus is closed.
+    /// Next outcome: an event, a lag notice, or bus closure.
+    pub async fn next_tick(&mut self) -> EventTick {
+        match self.receiver.recv().await {
+            Ok(event) => EventTick::Event(event),
+            Err(broadcast::error::RecvError::Lagged(n)) => EventTick::Lagged(n),
+            Err(broadcast::error::RecvError::Closed) => EventTick::Closed,
+        }
+    }
+
+    /// Back-compat wrapper: next event, or `None` when the bus is closed.
+    /// Lagged is swallowed here by design (see `next_tick` for the loud path).
     pub async fn next(&mut self) -> Option<AetherEvent> {
-        self.receiver.recv().await.ok()
+        loop {
+            match self.next_tick().await {
+                EventTick::Event(e) => return Some(e),
+                EventTick::Lagged(_) => continue, // skip the gap, keep serving
+                EventTick::Closed => return None,
+            }
+        }
     }
 
     /// Non-blocking drain (used by tests and the CLI demo).
@@ -174,6 +265,57 @@ impl EventSubscription {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_event_has_exactly_one_taxonomy_slot() {
+        // ADR-017: spot-check each category through representative variants.
+        let cases = [
+            (
+                AetherEvent::PassThrough {
+                    authority: "a".into(),
+                },
+                EventCategory::Transport,
+            ),
+            (
+                AetherEvent::RequestReceived { flow_id: 1 },
+                EventCategory::Pipeline,
+            ),
+            (
+                AetherEvent::WsClosed {
+                    flow_id: 1,
+                    total_messages: 0,
+                    total_bytes: 0,
+                },
+                EventCategory::Pipeline,
+            ),
+            (
+                AetherEvent::InterceptHold {
+                    flow_id: 1,
+                    direction: InterceptDirection::Request,
+                },
+                EventCategory::Security,
+            ),
+            (
+                AetherEvent::FlowCompleted { flow_id: 1 },
+                EventCategory::Lifecycle,
+            ),
+            (
+                AetherEvent::ErrorOccurred {
+                    context: "c".into(),
+                    message: "m".into(),
+                },
+                EventCategory::Lifecycle,
+            ),
+        ];
+        for (event, expected) in cases {
+            assert_eq!(event.category(), expected, "wrong slot for {event:?}");
+        }
+        // The category itself serializes snake_case for the control plane.
+        assert_eq!(
+            serde_json::to_value(EventCategory::Security).unwrap(),
+            serde_json::json!("security")
+        );
+    }
 
     #[tokio::test]
     async fn subscribers_get_events_published_after_subscription() {

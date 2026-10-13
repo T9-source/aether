@@ -230,6 +230,7 @@ impl ProxyServer {
                 } else {
                     TransportProto::Plaintext
                 },
+                client_h2: false,
                 tls: tls_facts.clone(),
             };
 
@@ -355,6 +356,7 @@ impl ProxyServer {
                     Box::new(tls_stream),
                     peer,
                     Some(facts),
+                    self.shutdown.clone(),
                 )
                 .await;
                 return Ok(());
@@ -487,6 +489,7 @@ impl ProxyServer {
             } else {
                 TransportProto::Plaintext
             },
+            client_h2: false,
             tls: tls_facts,
         };
 
@@ -604,12 +607,16 @@ fn client_keep_alive(req: &Request) -> bool {
 }
 
 async fn dial_tcp(host: &str, port: u16) -> AetherResult<TcpStream> {
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
     let addr = tokio::net::lookup_host((host, port))
         .await
         .map_err(|e| AetherError::network(format!("dns lookup {host}: {e}")))?
         .next()
         .ok_or_else(|| AetherError::network(format!("no addresses for {host}")))?;
-    TcpStream::connect(addr)
+    // Bounded connect (audit LOW): a host that swallows SYN must not pin a
+    // tunnel task forever — same budget as the proxied upstream leg.
+    tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
         .await
+        .map_err(|_| AetherError::network(format!("connect {addr}: timed out after 10s")))?
         .map_err(|e| AetherError::network(format!("connect {addr}: {e}")))
 }

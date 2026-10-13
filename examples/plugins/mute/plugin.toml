@@ -1,0 +1,6 @@
+name = "mute"
+version = "0.3.0"
+wasm = "plugin.wasm"
+timeout_ms = 100
+max_pages = 16
+capabilities = []

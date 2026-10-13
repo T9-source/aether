@@ -24,15 +24,20 @@ pub struct AetherConfig {
     pub upstream_alpn_h2: bool,
     /// Per-body capture limit in bytes (ADR-011).
     pub capture_max_body: usize,
+    /// WASM plugins (V0.3, ADR-019/020): one entry per plugin directory.
+    /// Relative paths resolve against the config file's directory.
+    pub plugins: Vec<aether_plugins::PluginEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProxySection {
     /// Explicit-proxy listen address (ADR-007).
     pub listen: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ControlSection {
     pub listen: String,
     /// Fixed token; generated per-run when absent.
@@ -40,6 +45,7 @@ pub struct ControlSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StorageSection {
     /// `"sqlite"` (default) or `"memory"`.
     pub backend: String,
@@ -48,6 +54,7 @@ pub struct StorageSection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InterceptSection {
     pub request: bool,
     pub response: bool,
@@ -76,6 +83,7 @@ impl Default for AetherConfig {
             upstream_tls_verify: true,
             upstream_alpn_h2: true,
             capture_max_body: 8 * 1024 * 1024,
+            plugins: Vec::new(),
         }
     }
 }
@@ -97,8 +105,25 @@ impl AetherConfig {
     pub fn load(path: &std::path::Path) -> AetherResult<Self> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| AetherError::config(format!("read {}: {e}", path.display())))?;
-        toml::from_str(&text)
-            .map_err(|e| AetherError::config(format!("parse {}: {e}", path.display())))
+        let mut cfg: AetherConfig = toml::from_str(&text)
+            .map_err(|e| AetherError::config(format!("parse {}: {e}", path.display())))?;
+        cfg.resolve_plugin_paths(path);
+        Ok(cfg)
+    }
+
+    /// Relative `[[plugins]]` paths are resolved against the config file's
+    /// directory — a config in `~/etc/aether.toml` saying `path = "plugins/hello"`
+    /// means `~/etc/plugins/hello`, never the daemon's CWD.
+    fn resolve_plugin_paths(&mut self, config_path: &std::path::Path) {
+        let base = config_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        for entry in &mut self.plugins {
+            if entry.path.is_relative() {
+                entry.path = base.join(&entry.path);
+            }
+        }
     }
 
     pub fn validate(&self) -> AetherResult<()> {

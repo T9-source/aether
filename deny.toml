@@ -1,0 +1,61 @@
+# cargo-deny — supply-chain gate (ADR-018 stabilization gate, item 2).
+# Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+#
+# One tool covers what cargo-audit does (RustSec advisories) plus license and
+# source checks — ADR-018 requires the audit half of the gate to be CI-visible,
+# not a manual memo. Run: `cargo deny check` (CI job: security).
+
+[graph]
+# All targets: the daemon ships to Linux/macOS/Windows dev machines alike.
+all-features = true
+
+[advisories]
+version = 2
+# Vulnerabilities and unsound crates are hard failures. Unmaintained and
+# yanked start as warnings — a security proxy should not silently grow them,
+# but they must not block a green build the day a transitive dep goes stale.
+ignore = []
+
+[licenses]
+version = 2
+# OSI-recognised permissive + weak-copyleft licenses compatible with shipping
+# inside an Apache-2.0 product (MIT, Apache-2.0, BSD, ISC, MPL-2.0, Unicode-3.0).
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+# ring bundles BoringSSL-derived code; its Cargo license is a compound
+# expression that cargo-deny resolves as "ISC AND MIT AND OpenSSL".
+# The OpenSSL clause applies to code relicensed under the OpenSSL license by
+# upstream — documented exception, reviewed 2026-10-11.
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+# Duplicated deps are a smell, not a crime — warn until the tree is small
+# enough to hard-deny. windows-* leaf ABI shims routinely duplicate across
+# windows-targets generations; harmless and outside our support surface.
+skip = [
+    { name = "windows_x86_64_msvc" },
+    { name = "windows_x86_64_gnu" },
+    { name = "windows_x86_64_gnullvm" },
+    { name = "windows_i686_msvc" },
+    { name = "windows_i686_gnu" },
+    { name = "windows_i686_gnullvm" },
+    { name = "windows_aarch64_msvc" },
+    { name = "windows_aarch64_gnullvm" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

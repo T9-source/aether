@@ -9,12 +9,10 @@
 //! - server-pushed frames are `{"type":"event","event":{...AetherEvent...}}`.
 
 use aether_core::error::{AetherError, AetherResult};
-use aether_core::hooks::HookRegistry;
-use aether_core::storage::{FlowQuery, FlowStats, Storage};
-use aether_core::{EventBus, InterceptDirection, RuleSpec};
-use aether_http::ca::CaManager;
-use aether_http::intercept::{HeldDecision, HeldPayload, InterceptState};
-use aether_http::upstream::UpstreamCfg;
+use aether_core::events::EventTick;
+use aether_core::storage::{FlowQuery, FlowStats};
+use aether_core::{EventBus, RuleSpec};
+use aether_http::intercept::{HeldDecision, HeldPayload};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -25,25 +23,21 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 
-use crate::rules::RulesStore;
-
-/// Everything an op handler may touch.
+/// Everything one control connection may touch. Protocol state only — all
+/// behavior lives in [`Services`] (ADR-016: the control plane is a wire
+/// codec that delegates, never a behavior owner).
 pub struct ControlShared {
     pub token: String,
+    pub services: Arc<crate::services::Services>,
+    /// The event stream tap: the control plane *forwards* bus events to
+    /// clients — reading the stream is protocol plumbing, not behavior
+    /// (ADR-016); publishing stays with the engine/services.
     pub bus: EventBus,
-    pub storage: Arc<dyn Storage>,
-    pub intercept: Arc<InterceptState>,
-    pub rules: Arc<RulesStore>,
-    /// The live hook registry the engine reads; rule mutations re-project
-    /// into it via `RulesStore::sync_into` (ADR-006 #1).
-    pub registry: Arc<HookRegistry>,
-    pub ca: Arc<CaManager>,
-    pub upstream: UpstreamCfg,
+    pub version: &'static str,
+    pub started_at_unix_ms: u64,
     /// Human-readable proxy listener (the UI status bar shows it — users
     /// need to know where to point their clients).
     pub proxy_addr: String,
-    pub version: &'static str,
-    pub started_at_unix_ms: u64,
 }
 
 /// Requests. `Auth` must be the first frame on every connection.
@@ -141,16 +135,8 @@ impl From<HeldPayloadDto> for HeldPayload {
     }
 }
 
-/// Row shape for `intercept_list` (mirror of the engine's HeldInfo).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HeldRow {
-    pub flow_id: u64,
-    pub direction: InterceptDirection,
-    pub method: Option<String>,
-    pub host: Option<String>,
-    pub path: Option<String>,
-    pub status: Option<u16>,
-}
+/// Row shape for `intercept_list` lives with its behavior
+/// (`services::intercept::HeldRow`, ADR-016).
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsInfo {
@@ -245,8 +231,9 @@ async fn handle_client(
     let auth = tokio::time::timeout(std::time::Duration::from_secs(10), source.next()).await;
     let authenticated = match auth {
         Ok(Some(Ok(Message::Text(text)))) => {
+            let text = text.as_str();
             matches!(
-                serde_json::from_str::<ControlRequest>(&text),
+                serde_json::from_str::<ControlRequest>(text),
                 Ok(ControlRequest::Auth { token }) if constant_time_eq(&token, &shared.token)
             )
         }
@@ -254,14 +241,14 @@ async fn handle_client(
     };
     if !authenticated {
         let err = serde_json::json!({"type":"response","ok":false,"error":{"kind":"auth","message":"authentication required or token mismatch"}});
-        let _ = sink.send(Message::Text(err.to_string())).await;
+        let _ = sink.send(Message::Text(err.to_string().into())).await;
         return Err(AetherError::network("control plane auth failed"));
     }
     let hello = serde_json::json!({
         "type":"response","ok":true,
         "result":{"version": shared.version, "server_time_unix_ms": aether_core::model::unix_millis_now()}
     });
-    sink.send(Message::Text(hello.to_string()))
+    sink.send(Message::Text(hello.to_string().into()))
         .await
         .map_err(|e| AetherError::network(format!("ws send: {e}")))?;
 
@@ -273,21 +260,38 @@ async fn handle_client(
                 let Some(msg) = incoming else { return Ok(()) };
                 let msg = msg.map_err(|e| AetherError::network(format!("ws recv: {e}")))?;
                 let Message::Text(text) = msg else { continue };
-                let reply = match serde_json::from_str::<ControlRequest>(&text) {
+                let text = text.as_str();
+                let reply = match serde_json::from_str::<ControlRequest>(text) {
                     Ok(req) => match dispatch(req, &shared).await {
                         Ok(result) => serde_json::json!({"type":"response","ok":true,"result":result}),
                         Err(e) => serde_json::json!({"type":"response","ok":false,"error":{"kind":e.kind_name(),"message":e.to_string()}}),
                     },
                     Err(e) => serde_json::json!({"type":"response","ok":false,"error":{"kind":"protocol","message":format!("bad request: {e}")}}),
                 };
-                sink.send(Message::Text(reply.to_string()))
+                sink.send(Message::Text(reply.to_string().into()))
                     .await
                     .map_err(|e| AetherError::network(format!("ws send: {e}")))?;
             }
-            event = events.next() => {
-                let Some(event) = event else { return Ok(()) };
-                let frame = serde_json::json!({"type":"event","event":event});
-                sink.send(Message::Text(frame.to_string()))
+            tick = events.next_tick() => {
+                // Audit M6: a slow console consumer that falls behind gets a
+                // `missed_events` notice and stays connected — losing events
+                // is recoverable (storage is the source of truth, ADR-017),
+                // while the old silent `None` path looked like "bus closed"
+                // and tore the socket down.
+                let frame = match tick {
+                    EventTick::Event(event) => {
+                        // ADR-017: the taxonomy rides on every pushed frame so UI
+                        // filters and future plugins can subscribe by category.
+                        let category = event.category();
+                        serde_json::json!({"type":"event","event":event,"category":category})
+                    }
+                    EventTick::Lagged(n) => {
+                        tracing::warn!(missed = n, "slow control client resyncing from storage");
+                        serde_json::json!({"type":"missed_events","missed":n})
+                    }
+                    EventTick::Closed => return Ok(()),
+                };
+                sink.send(Message::Text(frame.to_string().into()))
                     .await
                     .map_err(|e| AetherError::network(format!("ws send: {e}")))?;
             }
@@ -295,15 +299,20 @@ async fn handle_client(
     }
 }
 
+/// Token comparison that leaks nothing — not the bytes, and not the length
+/// (a naive `a == b` or an early `len()` return lets a local process probe
+/// the token by timing; AUDIT-2026-10-11 finding F1, fixed).
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let (a, b) = (a.as_bytes(), b.as_bytes());
-    if a.len() != b.len() {
-        return false;
+    let mut acc = 0u8;
+    // Always loop over the longer length, reading 0 past the end of the
+    // shorter one: runtime is a function of the *maximum* length only.
+    for i in 0..a.len().max(b.len()) {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        acc |= x ^ y;
     }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
+    acc == 0
 }
 
 async fn dispatch(
@@ -311,6 +320,9 @@ async fn dispatch(
     shared: &Arc<ControlShared>,
 ) -> AetherResult<serde_json::Value> {
     use ControlRequest::*;
+    // ADR-016: every arm is a one-line delegation — the control plane owns
+    // the wire shape, the services own the behavior.
+    let sv = &shared.services;
     let value = match req {
         Auth { .. } => return Err(AetherError::protocol("already authenticated")),
         Ping => serde_json::json!({"pong": true}),
@@ -320,35 +332,29 @@ async fn dispatch(
             after,
             host,
             method,
-        } => {
-            let page = shared
-                .storage
-                .list_flows(FlowQuery {
+        } => serde_json::to_value(
+            sv.traffic
+                .list(FlowQuery {
                     limit: limit.unwrap_or(50),
                     before,
                     after,
                     host,
                     method,
                 })
-                .await?;
-            serde_json::to_value(page).map_err(|e| AetherError::protocol(e.to_string()))?
-        }
-        FlowsGet { id } => {
-            let flow = shared.storage.get_flow(id).await?;
-            serde_json::to_value(flow).map_err(|e| AetherError::protocol(e.to_string()))?
-        }
+                .await?,
+        )
+        .map_err(|e| AetherError::protocol(e.to_string()))?,
+        FlowsGet { id } => serde_json::to_value(sv.traffic.get(id).await?)
+            .map_err(|e| AetherError::protocol(e.to_string()))?,
         FlowsSearch { query, limit } => {
-            let hits = shared
-                .storage
-                .search_flows(&query, limit.unwrap_or(50))
-                .await?;
-            serde_json::to_value(hits).map_err(|e| AetherError::protocol(e.to_string()))?
+            serde_json::to_value(sv.traffic.search(&query, limit.unwrap_or(50)).await?)
+                .map_err(|e| AetherError::protocol(e.to_string()))?
         }
         StatsGet => {
             let stats = StatsInfo {
-                flows: shared.storage.flow_stats().await?,
-                held: shared.intercept.held_count(),
-                rules: shared.rules.list().len(),
+                flows: sv.traffic.stats().await?,
+                held: sv.intercept.held_count(),
+                rules: sv.rules.list().len(),
                 uptime_ms: aether_core::model::unix_millis_now()
                     .saturating_sub(shared.started_at_unix_ms),
                 version: shared.version.to_string(),
@@ -356,32 +362,15 @@ async fn dispatch(
             };
             serde_json::to_value(stats).map_err(|e| AetherError::protocol(e.to_string()))?
         }
-        InterceptList => {
-            let rows: Vec<HeldRow> = shared
-                .intercept
-                .list()
-                .into_iter()
-                .map(|h| HeldRow {
-                    flow_id: h.flow_id,
-                    direction: h.direction,
-                    method: h.method,
-                    host: h.host,
-                    path: h.path,
-                    status: h.status,
-                })
-                .collect();
-            serde_json::to_value(rows).map_err(|e| AetherError::protocol(e.to_string()))?
-        }
-        InterceptShow { id } => {
-            let payload = shared.intercept.payload(id);
-            match payload {
-                Some(p) => serde_json::to_value(HeldPayloadDto::from(p))
-                    .map_err(|e| AetherError::protocol(e.to_string()))?,
-                None => return Err(AetherError::protocol(format!("no held flow {id}"))),
-            }
-        }
+        InterceptList => serde_json::to_value(sv.intercept.list_rows())
+            .map_err(|e| AetherError::protocol(e.to_string()))?,
+        InterceptShow { id } => match sv.intercept.show(id) {
+            Some(p) => serde_json::to_value(HeldPayloadDto::from(p))
+                .map_err(|e| AetherError::protocol(e.to_string()))?,
+            None => return Err(AetherError::protocol(format!("no held flow {id}"))),
+        },
         InterceptDrop { id } => {
-            serde_json::json!({"removed": shared.intercept.resolve(id, HeldDecision::Drop, &shared.bus)?})
+            serde_json::json!({"removed": sv.intercept.drop_held(id)?})
         }
         InterceptRelease { id, decision } => {
             let held = match decision {
@@ -390,48 +379,22 @@ async fn dispatch(
                     HeldDecision::Forward(HeldPayload::from(payload))
                 }
             };
-            serde_json::json!({"removed": shared.intercept.resolve(id, held, &shared.bus)?})
+            serde_json::json!({"removed": sv.intercept.release(id, held)?})
         }
         InterceptSet { request, response } => {
-            let req_now = request.unwrap_or(shared.intercept.request_enabled());
-            let res_now = response.unwrap_or(shared.intercept.response_enabled());
-            shared.intercept.set_enabled(req_now, res_now);
+            let (req_now, res_now) = sv.intercept.set_enabled(request, response);
             serde_json::json!({"request": req_now, "response": res_now})
         }
-        RulesList => serde_json::to_value(shared.rules.list())
+        RulesList => serde_json::to_value(sv.rules.list())
             .map_err(|e| AetherError::protocol(e.to_string()))?,
-        RulesAdd { spec } => {
-            let id = shared.rules.add(spec)?;
-            shared.rules.sync_into(&shared.registry)?;
-            serde_json::json!({"id": id})
-        }
-        RulesRemove { id } => {
-            let removed = shared.rules.remove(id);
-            if removed {
-                shared.rules.sync_into(&shared.registry)?;
-            }
-            serde_json::json!({"removed": removed})
-        }
+        RulesAdd { spec } => serde_json::json!({"id": sv.rules.add(spec)?}),
+        RulesRemove { id } => serde_json::json!({"removed": sv.rules.remove(id)?}),
         RulesSetEnabled { id, enabled } => {
-            let changed = shared.rules.set_enabled(id, enabled);
-            if changed {
-                shared.rules.sync_into(&shared.registry)?;
-            }
-            serde_json::json!({"changed": changed})
+            serde_json::json!({"changed": sv.rules.set_enabled(id, enabled)?})
         }
-        CaExportPem => serde_json::json!({"pem": shared.ca.ca_cert_pem()}),
+        CaExportPem => serde_json::json!({"pem": sv.ca.export_pem()}),
         FlowsReplay { request } => {
-            let flow_id = shared.storage.alloc_id().await?;
-            let storage = shared.storage.clone();
-            let bus = shared.bus.clone();
-            let cfg = shared.upstream.clone();
-            tokio::spawn(async move {
-                if let Err(e) = crate::replay::run_replay(request, flow_id, storage, bus, cfg).await
-                {
-                    tracing::warn!(%flow_id, error = %e, "replay failed");
-                }
-            });
-            serde_json::json!({"flow_id": flow_id})
+            serde_json::json!({"flow_id": sv.replay.start(request).await?})
         }
     };
     Ok(value)
@@ -469,5 +432,33 @@ mod tests {
         assert!(!origin_allowed(""));
         // custom app-scheme origins (Electron-style) are not trusted
         assert!(!origin_allowed("app://aether"));
+    }
+    #[test]
+    fn constant_time_eq_is_correct_for_all_length_classes() {
+        // AUDIT-2026-10-11 F1 regression: length must not leak, and the
+        // result must be correct across mixed lengths (loop runs max len).
+        assert!(super::constant_time_eq("", ""));
+        assert!(super::constant_time_eq("abc", "abc"));
+        assert!(super::constant_time_eq(
+            "a".repeat(64).as_str(),
+            "a".repeat(64).as_str()
+        ));
+        // wrong content, same length
+        assert!(!super::constant_time_eq("abc", "abd"));
+        // wrong content, different lengths (pre-fix this returned via len check)
+        assert!(!super::constant_time_eq("abc", "abcd"));
+        assert!(!super::constant_time_eq("abcd", "abc"));
+        // one side empty
+        assert!(!super::constant_time_eq("", "x"));
+        assert!(!super::constant_time_eq("x", ""));
+        // unicode multi-byte must compare bytes correctly
+        assert!(super::constant_time_eq(
+            "\u{627}\u{644}\u{62b}\u{644}",
+            "\u{627}\u{644}\u{62b}\u{644}"
+        ));
+        assert!(!super::constant_time_eq(
+            "\u{627}\u{644}\u{62b}\u{644}",
+            "\u{627}\u{644}\u{62b}"
+        ));
     }
 }

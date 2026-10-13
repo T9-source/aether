@@ -1,0 +1,53 @@
+name: soak
+
+# Nightly long-soak monitor (ADR-018 gate item 4).
+#
+# Hosted runners cap a job at 6h, so CI runs a 5h50m soak with the same
+# `--assert-mode` gate the acceptance uses. The one-time 24h acceptance run
+# (`aether soak --secs 86400 --assert-mode`) stays a scheduled runtime task
+# on a machine that can stay up — the gate command is identical, per ADR-018.
+# `workflow_dispatch` exists so the founder can also fire this manually.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # nightly, 03:00 UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355 # 5h55m — under the 6h hosted ceiling, covers build
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.8.1
+      - name: Build release
+        run: cargo build --release -p aether-cli
+      - name: Long soak with asserted budgets (ADR-018 item 4)
+        run: |
+          set -o pipefail
+          ./target/release/aether soak --secs 21000 --assert-mode 2>&1 | tee soak.log
+      - name: Gate on the machine-readable verdict
+        run: |
+          grep -o 'SOAK_JSON: .*' soak.log | tee soak-verdict.json
+          grep -q '"pass":true' soak-verdict.json || {
+            echo "::error::soak verdict is a breach — see soak.log artifact"
+            exit 1
+          }
+      - name: Upload soak evidence
+        if: always()
+        # Pinned by commit SHA like every other third-party action in this
+        # repository — Scorecard flags unpinned third-party actions.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: soak-log
+          path: |
+            soak.log
+            soak-verdict.json
+          retention-days: 90

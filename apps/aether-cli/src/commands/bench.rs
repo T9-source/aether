@@ -68,7 +68,7 @@ fn report(name: &str, samples: &[f64]) {
     );
 }
 
-pub async fn proxy(requests: u32) -> AetherResult<()> {
+pub async fn proxy(requests: u32, json: Option<PathBuf>) -> AetherResult<()> {
     println!("Aether proxy latency bench — {requests} requests per path");
     println!("  origin : local TLS echo (self-signed), fresh connection per request");
     println!("  proxy  : embedded engine — real pipeline + SQLite storage (WAL)");
@@ -118,6 +118,43 @@ pub async fn proxy(requests: u32) -> AetherResult<()> {
         "  MITM tunnel     : +{:.2}ms (includes a 2nd TLS handshake per request)",
         p50(&mitm) - p50(&direct)
     );
+
+    // ── machine-readable results (ADR-018 item 5: perf regression gate) ────
+    let stats = |name: &str, v: &[f64]| {
+        serde_json::json!({
+            "p50_ms": (p50(v) * 1000.0).round() / 1000.0,
+            "p95_ms": (lab::percentile(v, 0.95) * 1000.0).round() / 1000.0,
+            "p99_ms": (lab::percentile(v, 0.99) * 1000.0).round() / 1000.0,
+            "mean_ms": ((v.iter().sum::<f64>() / v.len().max(1) as f64) * 1000.0).round() / 1000.0,
+            "n": v.len(),
+            "_name": name,
+        })
+    };
+    let results = serde_json::json!({
+        "schema": "aether-bench-proxy/1",
+        "requests_per_path": requests,
+        "direct_tls": stats("direct_tls", &direct),
+        "via_proxy_plain": stats("via_proxy_plain", &plain),
+        "via_proxy_mitm": stats("via_proxy_mitm", &mitm),
+        "overhead_p50_ms": {
+            "plain": ((p50(&plain) - p50(&direct)) * 1000.0).round() / 1000.0,
+            "mitm": ((p50(&mitm) - p50(&direct)) * 1000.0).round() / 1000.0,
+        },
+    });
+    println!("BENCH_JSON: {results}");
+    if let Some(path) = &json {
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&results).map_err(|e| {
+                aether_core::error::AetherError::storage(format!("serialize bench json: {e}"))
+            })?,
+        )
+        .map_err(|e| {
+            aether_core::error::AetherError::storage(format!("write {}: {e}", path.display()))
+        })?;
+        println!("baseline written to {}", path.display());
+    }
+
     println!("\nbaseline recorded for MILESTONE-0 criterion 11 (measurement before optimization).");
     Ok(())
 }
