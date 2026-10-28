@@ -1,5 +1,5 @@
 //! `aether ca` — the MITM root certificate (ADR-004).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 use super::{connect, print_json};
 use aether_core::error::AetherResult;

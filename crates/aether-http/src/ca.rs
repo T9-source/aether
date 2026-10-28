@@ -1,5 +1,5 @@
 //! Aether — network engine.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! CA manager (ADR-004): one long-lived root CA per data directory, leaf
 //! certificates minted on demand per authority, cached in memory.

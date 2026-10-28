@@ -115,6 +115,6 @@ inspection, the V0 dogfoodable kit (bench/soak/demo/LIMITATIONS), and the
 V0.2.x stabilization gate artifacts (AUDIT, fuzz targets, perf budgets,
 soak gate). See `docs/PHASE-*.md` and `docs/adr/` for the full record.
 
-[Unreleased]: https://github.com/smart-jemy/aether/compare/0.2.1...HEAD
-[0.2.1]: https://github.com/smart-jemy/aether/compare/0.2.0...0.2.1
-[0.2.0]: https://github.com/smart-jemy/aether/releases/tag/0.2.0
+[Unreleased]: https://github.com/T9-source/aether/compare/0.2.1...HEAD
+[0.2.1]: https://github.com/T9-source/aether/compare/0.2.0...0.2.1
+[0.2.0]: https://github.com/T9-source/aether/releases/tag/0.2.0

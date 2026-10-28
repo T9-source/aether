@@ -1,5 +1,5 @@
 //! Aether storage — SQLite via sqlx (runtime API, no macros).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! ADR-005 contract: WAL journal, keyset pagination (cursors only, no
 //! offsets), full-fidelity flow records (serialized `Request`/`Response`

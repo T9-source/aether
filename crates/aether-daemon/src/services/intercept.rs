@@ -1,6 +1,6 @@
 //! InterceptService — operator hold/release behavior behind one boundary
 //! (ADR-016).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 use aether_core::error::AetherResult;
 use aether_core::{EventBus, InterceptDirection};

@@ -1,5 +1,5 @@
 //! Aether — WebSocket relay codec (V0.2, ADR-013).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! RFC 6455 framing for the inspection relay. The relay is *not* a proxy in
 //! the h1 sense: frames cross the connection **byte-for-byte untouched**

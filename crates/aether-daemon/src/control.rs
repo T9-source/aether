@@ -1,5 +1,5 @@
 //! Aether daemon — control plane (ADR-002: WebSocket + JSON, single codec).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Protocol v1 (ADR-010):
 //! - browser-style origin check at upgrade time (reject non-local origins),

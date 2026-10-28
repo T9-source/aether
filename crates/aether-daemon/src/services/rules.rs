@@ -1,6 +1,6 @@
 //! RulesService — declarative rule CRUD with immediate re-projection into
 //! the live hook registry (ADR-016, ADR-006 #1).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 use aether_core::RuleSpec;
 use aether_core::error::AetherResult;

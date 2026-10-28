@@ -1,5 +1,5 @@
 //! Aether — network engine.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Upstream leg: dial the origin, send the (already hooked/edited) request,
 //! read the response with **bounded capture** — bodies above the capture

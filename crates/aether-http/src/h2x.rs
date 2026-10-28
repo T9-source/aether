@@ -1,5 +1,5 @@
 //! Aether — HTTP/2 leg codec (V0.2, ADR-013).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! The h1 wire codec is hand-rolled because a security proxy must own its
 //! bytes. HTTP/2 is a different animal: HPACK state machines, flow-control

@@ -1,5 +1,5 @@
 //! `aether serve` — start the daemon in this terminal.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 use aether_core::error::AetherResult;
 use aether_daemon::{AetherConfig, DaemonOptions, run as daemon_run};
@@ -57,7 +57,7 @@ pub async fn run(
     .await?;
 
     println!(
-        "Aether {} — by smart-jemy (Apache-2.0)",
+        "Aether {} — by T9-source (Apache-2.0)",
         aether_daemon::VERSION
     );
     println!("──────────────────────────────────────────────────────");

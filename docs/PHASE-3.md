@@ -1,6 +1,6 @@
 # Phase 3 — V0 dogfoodable + V0.2 Modern Web (h2 + WebSocket)
 
-**Status: Complete** · 2026-10-09 · Author: smart-jemy
+**Status: Complete** · 2026-10-09 · Author: T9-source
 
 Phase 3 closes two chapters at once: the **Milestone-0 exit review** (V0 as
 a dogfoodable, measured product) and the **V0.2 "Modern Web" rung** of the

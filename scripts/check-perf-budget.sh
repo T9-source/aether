@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Performance regression gate (ADR-018 item 5).
-# Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+# Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 #
 # Runs `aether bench proxy` against the in-repo baseline
 # (docs/bench/baseline.json) with explicit factors. CI-visible drift is a

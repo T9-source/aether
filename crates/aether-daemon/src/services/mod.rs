@@ -1,6 +1,6 @@
 //! The behavior layer (ADR-016) — services own behavior, the daemon owns
 //! lifecycle, the control plane owns the wire protocol.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! The daemon (`daemon::run`) is composition only: it builds the services
 //! below and never implements behavior itself. The control plane

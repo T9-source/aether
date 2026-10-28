@@ -1,5 +1,5 @@
 //! `aether` CLI — a thin client of the Aether daemon (ADR-001).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Everything here works with **zero** UI crates in the picture:
 //! `serve` starts the daemon; every other command is a WebSocket client of
@@ -17,7 +17,7 @@ use std::path::PathBuf;
     name = "aether",
     version,
     about = "Aether — local-first, open-source, developer-first API security proxy",
-    author = "smart-jemy"
+    author = "T9-source"
 )]
 struct Cli {
     #[command(subcommand)]

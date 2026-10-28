@@ -1,5 +1,5 @@
 //! `aether soak` — steady-state health probe (MILESTONE-0 criterion 12).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Continuous mixed traffic (plain + MITM) through the embedded engine with
 //! real SQLite/WAL persistence, sampling RSS and open FDs at 1 Hz. The 24h

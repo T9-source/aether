@@ -1,5 +1,5 @@
 //! `aether flows` — history inspection.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 use super::{connect, print_json, truncate};
 use aether_core::error::AetherResult;

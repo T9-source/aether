@@ -1,5 +1,5 @@
 //! Command implementations.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 pub mod bench;
 pub mod ca;

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # demo.sh — the Aether birth moment, reproducible end-to-end, minus secrets.
-# Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+# Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 #
 # Proves, on one machine, in ~30 seconds:
 #   1. headless daemon start (ADR-001)

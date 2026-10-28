@@ -1,6 +1,6 @@
 //! aether-plugins — the V0.3 WASM plugin host (ADR-019/020).
 //!
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Three moving parts, each small on purpose:
 //!

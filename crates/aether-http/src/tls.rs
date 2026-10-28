@@ -1,5 +1,5 @@
 //! Aether — network engine.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! TLS configuration (ADR-004): rustls with the `ring` provider everywhere.
 //! - MITM server leg: per-connection config with a **fixed** leaf for the

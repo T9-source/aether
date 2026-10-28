@@ -128,4 +128,4 @@ Quotes were fetched from primary sources on 2026-10-11 and re-checked each
 release; claims we could not source verbatim are simply not made. Vendor
 pages describe vendor products — we link them so you can verify yourself.
 Spotted an error? That's a bug report, not a flame war:
-[open an issue](https://github.com/smart-jemy/aether/issues).
+[open an issue](https://github.com/T9-source/aether/issues).

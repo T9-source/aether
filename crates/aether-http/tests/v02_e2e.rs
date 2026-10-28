@@ -1,5 +1,5 @@
 //! Aether — V0.2 end-to-end tests (ADR-013).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Real sockets, real TLS, real h2 handshakes, real WebSocket frames:
 //! - h2 client leg ↔ h2 upstream (the browser-to-modern-origin path)

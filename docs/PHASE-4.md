@@ -2,7 +2,7 @@
 
 > Status: **complete**. This phase converts an external architecture review
 > into binding decisions + code, *before* any new feature work. Author of
-> record: **smart-jemy**.
+> record: **T9-source**.
 
 ## Why this phase exists
 

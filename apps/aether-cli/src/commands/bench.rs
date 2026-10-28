@@ -1,5 +1,5 @@
 //! `aether bench flows` — the Milestone-0 scale gate.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Inserts N synthetic flows into SQLite (the exact storage path the daemon
 //! uses), then times keyset pagination and search. The historical target:

@@ -1,7 +1,7 @@
 # ADR Index — Aether
 
 Architecture Decision Records. One decision, one file, permanent status.
-**Author of record: smart-jemy** (founder). All statuses below are final.
+**Author of record: T9-source** (founder). All statuses below are final.
 
 | ADR | Title | Status |
 |-----|-------|--------|

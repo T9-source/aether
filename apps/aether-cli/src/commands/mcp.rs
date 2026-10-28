@@ -1,6 +1,6 @@
 //! MCP (Model Context Protocol) server — exposes a running Aether daemon to
 //! any MCP client (Claude Desktop, VS Code, Cline, …) over stdio.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Design invariants:
 //! - The daemon owns all state (ADR-001): this server is a *thin client* of

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //! Aether example — a minimal WebSocket echo origin (RFC 6455, server side).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Used by the V0.2 demo (`scripts/` + docs) and handy for manual testing:
 //!   node examples/ws-echo-server.js [port]

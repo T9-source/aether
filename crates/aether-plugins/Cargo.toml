@@ -1,5 +1,5 @@
 # WASM plugin host (V0.3, ADR-019/020).
-# Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+# Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 [package]
 name = "aether-plugins"

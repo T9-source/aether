@@ -2,10 +2,10 @@
 
 <p align="center"><img src="assets/social-preview.png" alt="Aether — local-first API security proxy" width="720"></p>
 
-[![Release](https://img.shields.io/github/v/release/smart-jemy/aether?label=Release&color=D4AF37)](https://github.com/smart-jemy/aether/releases)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/smart-jemy/aether/badge)](https://scorecard.dev/viewer.svg?url=github.com/smart-jemy/aether)
-[![ci](https://github.com/smart-jemy/aether/actions/workflows/ci.yml/badge.svg)](https://github.com/smart-jemy/aether/actions/workflows/ci.yml)
-[![codeql](https://github.com/smart-jemy/aether/actions/workflows/codeql.yml/badge.svg)](https://github.com/smart-jemy/aether/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/T9-source/aether?label=Release&color=D4AF37)](https://github.com/T9-source/aether/releases)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/T9-source/aether/badge)](https://scorecard.dev/viewer.svg?url=github.com/T9-source/aether)
+[![ci](https://github.com/T9-source/aether/actions/workflows/ci.yml/badge.svg)](https://github.com/T9-source/aether/actions/workflows/ci.yml)
+[![codeql](https://github.com/T9-source/aether/actions/workflows/codeql.yml/badge.svg)](https://github.com/T9-source/aether/actions/workflows/codeql.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 **The API proxy built like a database, not a desktop app.**
@@ -42,7 +42,7 @@ vendor-linked comparison with the receipts:
 
 ## Install
 
-**Release binaries** (from [Releases](https://github.com/smart-jemy/aether/releases), sha256 checksums included):
+**Release binaries** (from [Releases](https://github.com/T9-source/aether/releases), sha256 checksums included):
 
 | Target | File |
 |---|---|
@@ -54,7 +54,7 @@ vendor-linked comparison with the receipts:
 **From source:**
 
 ```bash
-git clone https://github.com/smart-jemy/aether && cd aether
+git clone https://github.com/T9-source/aether && cd aether
 cargo build --release -p aether-cli   # first build takes a few minutes
 ```
 
@@ -266,6 +266,6 @@ aether/
 
 ## Founder
 
-Built by **smart-jemy**. Apache-2.0 — see [LICENSE](LICENSE) and
+Built by **T9-source**. Apache-2.0 — see [LICENSE](LICENSE) and
 [ADR-008](docs/adr/ADR-008-license-and-business-model.md). Zero telemetry,
 ever.

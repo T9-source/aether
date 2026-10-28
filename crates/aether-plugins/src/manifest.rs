@@ -1,6 +1,6 @@
 //! `plugin.toml` — the declarative plugin manifest (ADR-019 §permissions).
 //!
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Permissions v1 are **static**: the manifest declares what the plugin may
 //! do, mapped 1:1 onto the existing `Capabilities` vocabulary, and the

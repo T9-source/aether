@@ -1,7 +1,7 @@
 //! The serialization-shaped hook contract, cut at the WASM boundary
 //! (ADR-006 rule #2 — "hosting change, not an API redesign").
 //!
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Shape:
 //! - **In**: a [`HttpRequestView`] / [`HttpResponseView`] — owned, ordered,

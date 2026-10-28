@@ -1,5 +1,5 @@
 //! `lab` — an embedded single-node Aether stack for benchmarks and soak runs.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! The daemon is a thin wiring of `aether-http` + storage; the lab builds the
 //! same wiring in-process so `bench proxy` and `aether soak` measure the real

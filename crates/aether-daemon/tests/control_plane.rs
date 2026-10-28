@@ -1,5 +1,5 @@
 //! Aether — daemon control-plane integration tests (ADR-002/010).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Boots the full daemon (proxy + control plane + memory storage) and drives
 //! it exactly like the CLI will: WebSocket → auth → ops. This is the

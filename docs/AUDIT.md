@@ -7,7 +7,7 @@
   `cargo-deny` (advisories + licenses + sources). Findings are either **fixed
   in this commit** or **filed with a boundary** in `LIMITATIONS.md` — no
   silent acceptance.
-- **Reviewer:** smart-jemy, with the ADR-018 gate as the forcing function.
+- **Reviewer:** T9-source, with the ADR-018 gate as the forcing function.
 
 ## 1. h1 framing decisions (`aether-http/src/wire.rs`)
 

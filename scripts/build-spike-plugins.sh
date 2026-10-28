@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the example WASM plugins (ADR-019).
-# Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+# Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 #
 # Usage: scripts/build-spike-plugins.sh
 #

@@ -1,5 +1,5 @@
 //! Fuzz the control-plane JSON decoder (ADR-018 gate item).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Invariant: `serde_json::from_str::<ControlRequest>` over arbitrary UTF-8
 //! returns Ok/Err — never panics, never hangs (no recursion bombs beyond

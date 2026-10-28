@@ -15,7 +15,7 @@ the product, not an afterthought. Zero telemetry, ever.
 **Do not open a public GitHub issue for security reports.**
 
 Use GitHub **Security Advisories → Report a vulnerability** (private
-disclosure) on the `smart-jemy/aether` repository.
+disclosure) on the `T9-source/aether` repository.
 
 Please include:
 

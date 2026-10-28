@@ -4,7 +4,7 @@
 # forbidden markers and fails CI on a hit. A test-only runtime under
 # [dev-dependencies] is allowed. Keep in sync with
 # docs/adr/ADR-014-core-dependency-policy.md.
-# Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+# Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 set -euo pipefail
 
 MANIFEST="crates/aether-core/Cargo.toml"

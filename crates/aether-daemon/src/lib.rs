@@ -1,5 +1,5 @@
 //! Aether daemon — wires proxy engine + storage + control plane.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 pub mod config;
 pub mod control;

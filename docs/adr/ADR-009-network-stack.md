@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-08
-- **Author:** smart-jemy
+- **Author:** T9-source
 - **Phase:** 1 (implementation phase for V0.1)
 
 ## Context

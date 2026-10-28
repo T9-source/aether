@@ -1,5 +1,5 @@
 //! V0.3 plugin wiring, end to end (ADR-019/020).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Real daemon, real proxy, real wasm plugin:
 //! - an enabled hello plugin stamps `x-aether-hello` on every proxied

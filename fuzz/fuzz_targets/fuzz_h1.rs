@@ -1,5 +1,5 @@
 //! Fuzz the h1 head codec (ADR-018 gate item: fuzzing).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Invariants under arbitrary bytes:
 //!   1. `parse_request_head` / `parse_response_head` return errors — they

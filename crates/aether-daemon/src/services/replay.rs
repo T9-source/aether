@@ -1,6 +1,6 @@
 //! ReplayService — the operator's direct voice, launched as background work
 //! (ADR-016, ADR-012).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 use aether_core::EventBus;
 use aether_core::error::AetherResult;

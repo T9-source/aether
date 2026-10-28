@@ -1,5 +1,5 @@
 //! Aether CLI — WebSocket control client (ADR-002/010).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 use aether_core::error::{AetherError, AetherResult};
 use aether_daemon::ControlRequest;

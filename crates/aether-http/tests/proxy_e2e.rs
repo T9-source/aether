@@ -1,5 +1,5 @@
 //! Aether — end-to-end proxy tests.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Real sockets, real TLS, real event bus. These are the Phase-1 acceptance
 //! tests: an explicit proxy that records, hooks, intercepts, passes through.

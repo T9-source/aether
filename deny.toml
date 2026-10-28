@@ -1,5 +1,5 @@
 # cargo-deny — supply-chain gate (ADR-018 stabilization gate, item 2).
-# Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+# Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 #
 # One tool covers what cargo-audit does (RustSec advisories) plus license and
 # source checks — ADR-018 requires the audit half of the gate to be CI-visible,

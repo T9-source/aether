@@ -1,5 +1,5 @@
 //! Replay (Phase 2, ADR-012) — re-execute a request with no client leg.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Replay is the operator's *direct voice*: the request goes upstream exactly
 //! as submitted — no pipeline, no hooks, no intercept — but it is still a

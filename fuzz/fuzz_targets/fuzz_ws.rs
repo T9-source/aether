@@ -1,5 +1,5 @@
 //! Fuzz the RFC 6455 frame reader + fragment assembler (ADR-018 gate item).
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Invariants under arbitrary bytes:
 //!   1. `read_frame` returns `FrameError` (Eof / Io / Protocol / TooLarge) —

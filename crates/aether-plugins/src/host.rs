@@ -1,6 +1,6 @@
 //! [`WasmHook`] — the [`Hook`] adapter that runs a plugin instance per call.
 //!
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Hosting model (ADR-019):
 //! - **compile once**: the wasm module compiles into a

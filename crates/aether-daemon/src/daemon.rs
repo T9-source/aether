@@ -1,5 +1,5 @@
 //! Aether daemon — wires proxy engine + storage + control plane.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! The daemon is the only state owner (ADR-001): proxy listener, control
 //! plane, CA, rules, storage all live here; every client (CLI, GUI, CI) is

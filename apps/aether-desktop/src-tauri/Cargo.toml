@@ -4,8 +4,8 @@ description = "Aether desktop shell — wraps the Aether console UI in a native 
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-authors = ["smart-jemy"]
-repository = "https://github.com/smart-jemy/aether"
+authors = ["T9-source"]
+repository = "https://github.com/T9-source/aether"
 
 # Deliberately OUTSIDE the Cargo workspace: building the Tauri shell needs
 # desktop webview system libraries (webkit2gtk on Linux, WebView2 on Windows)

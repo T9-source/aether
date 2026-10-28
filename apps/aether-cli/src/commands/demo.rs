@@ -1,5 +1,5 @@
 //! `aether demo|info|about` — the Phase-0 proof and project meta.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 
 use aether_core::error::AetherResult;
 use aether_core::{
@@ -104,7 +104,7 @@ pub fn about() -> AetherResult<()> {
         aether_daemon::VERSION
     );
     println!();
-    println!("  founder   : smart-jemy");
+    println!("  founder   : T9-source");
     println!("  license   : Apache-2.0 (core) — see LICENSE");
     println!("  telemetry : zero, by design (ADR-008)");
     println!("  ai        : BYO-key, off by default (ADR-008)");

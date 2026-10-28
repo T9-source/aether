@@ -14,8 +14,8 @@ version = "0.2.1"
 edition = "2024"
 license = "Apache-2.0"
 rust-version = "1.85"
-authors = ["smart-jemy"]
-repository = "https://github.com/smart-jemy/aether"
+authors = ["T9-source"]
+repository = "https://github.com/T9-source/aether"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -2,7 +2,7 @@
 
 - **Status:** Phase 3 shipped (V0 dogfoodable + V0.2 h2/WebSocket) — 10/12 criteria fully verified; the remaining two are founder-machine runtime rituals (desktop CA install; full 24h soak run)
 - **Date:** 2026-10-08 (criteria), 2026-10-08 (status update)
-- **Author:** smart-jemy
+- **Author:** T9-source
 
 > **Birth moment (founder's definition, adopted verbatim):**
 > Run `aether`, point a browser at the proxy, open a real HTTPS website —

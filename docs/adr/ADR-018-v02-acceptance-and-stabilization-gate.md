@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-09
-- **Owner:** smart-jemy (founder)
+- **Owner:** T9-source (founder)
 
 ## Context
 

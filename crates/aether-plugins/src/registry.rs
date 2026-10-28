@@ -1,6 +1,6 @@
 //! [`PluginRegistry`] — load, list, enable, disable (ADR-020 §lifecycle).
 //!
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! Lifecycle rules, all settled in the V0.3 planning round:
 //!

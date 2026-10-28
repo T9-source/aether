@@ -1,5 +1,5 @@
 //! Aether — network engine.
-//! Copyright 2026 smart-jemy. Licensed under Apache-2.0 (see LICENSE).
+//! Copyright 2026 T9-source. Licensed under Apache-2.0 (see LICENSE).
 //!
 //! The proxy listener (ADR-007: explicit proxy only):
 //! - plain HTTP: absolute-form requests on the proxy port,

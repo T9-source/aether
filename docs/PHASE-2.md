@@ -1,6 +1,6 @@
 # Phase 2 — Console UI: history, viewer, intercept, replay
 
-**Status: Complete** · 2026-10-08 · Author: smart-jemy
+**Status: Complete** · 2026-10-08 · Author: T9-source
 
 Phase 2 of the roadmap ("Tauri UI + history + viewer + intercept + replay")
 delivers the first graphical client: a thin console that talks to the daemon
