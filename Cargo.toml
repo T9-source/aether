@@ -45,7 +45,7 @@ http = "1"
 bytes = "1"
 # --- storage (ADR-005): SQLite via sqlx, runtime API (no macros) ---
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
-dirs = "5"
+dirs = "7"
 getrandom = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
