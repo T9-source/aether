@@ -14,7 +14,17 @@ version = 2
 # Vulnerabilities and unsound crates are hard failures. Unmaintained and
 # yanked start as warnings — a security proxy should not silently grow them,
 # but they must not block a green build the day a transitive dep goes stale.
-ignore = []
+#
+# Transitive inside wasmtime's module-cache (zstd 0.13 — wasmtime 49.0.5 has
+# not adopted zstd 0.14 / zstd-safe 8.2 yet, so no semver-compatible fix
+# exists). The flagged paths are wasmtime's own cache decompression, not
+# reachable from aether's plugin contract (plugins ship signed, pinned
+# artifacts). Revisit when wasmtime bumps its zstd stack.
+ignore = [
+    { id = "RUSTSEC-2026-0391", reason = "wasmtime-internal-cache -> zstd 0.13; fix requires wasmtime-side major bump" },
+    { id = "RUSTSEC-2026-0398", reason = "wasmtime-internal-cache -> zstd 0.13; fix requires wasmtime-side major bump" },
+    { id = "RUSTSEC-2026-0403", reason = "wasmtime-internal-cache -> zstd 0.13; fix requires wasmtime-side major bump" },
+]
 
 [licenses]
 version = 2
