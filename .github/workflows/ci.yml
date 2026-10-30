@@ -59,8 +59,8 @@ jobs:
           sha256sum -c /tmp/cd.sha256
           tar -xzf /tmp/cd.tar.gz -C /tmp
           sudo install /tmp/cargo-deny-0.19.0-x86_64-unknown-linux-musl/cargo-deny /usr/local/bin/
-      - name: Patch vulnerable lock entry (RUSTSEC-2026-0410 — zstd-sys <2.1.2)
-        run: cargo update -p zstd-sys
+      - name: Refresh lock within semver (accumulated RUSTSEC advisories — gate runs after)
+        run: cargo update
       - name: Supply chain gate (ADR-018 item 2)
         run: cargo deny check
 
