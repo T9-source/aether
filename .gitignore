@@ -25,4 +25,5 @@ Thumbs.db
 .zwork/
 research/
 examples/plugins/*/target/
-examples/plugins/*/plugin.wasm
+# plugin.wasm fixtures ARE committed on purpose — the plugin integration
+# tests hard-fail without them (scripts/build-spike-plugins.sh builds them).
